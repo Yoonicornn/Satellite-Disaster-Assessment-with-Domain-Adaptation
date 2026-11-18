@@ -18,6 +18,3 @@ __pycache__/
 
 # macOS
 .DS_Store
-
-# Optional: the map files are a few MB each (they include the plotly library)
-reports/eda/*.html
