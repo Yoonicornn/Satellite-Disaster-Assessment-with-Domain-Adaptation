@@ -1,0 +1,7 @@
+disaster_type,no-damage,minor-damage,major-damage,destroyed,un-classified,total
+wind,59544,20571,6512,9721,3439,99787
+flooding,63586,9040,17103,1286,2981,93996
+fire,55180,655,679,9415,2383,68312
+tsunami,50460,1,921,6382,3137,60901
+earthquake,43350,194,49,3,86,43682
+volcano,2942,61,35,530,730,4298

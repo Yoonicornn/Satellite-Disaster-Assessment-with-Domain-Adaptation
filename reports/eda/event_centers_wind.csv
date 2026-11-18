@@ -1,0 +1,6 @@
+event,lon_center,lat_center,north_south_km,east_west_km,n_points
+hurricane-matthew,-73.98,18.43,53.31,66.4,379.0
+hurricane-michael,-85.66,30.19,27.22,16.32,534.0
+joplin-tornado,-94.49,37.07,3.39,11.31,148.0
+moore-tornado,-97.48,35.33,5.04,10.93,222.0
+tuscaloosa-tornado,-87.48,33.22,11.67,14.52,288.0

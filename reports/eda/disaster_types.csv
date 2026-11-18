@@ -1,0 +1,7 @@
+disaster_type,events,images,buildings,event names
+fire,5,6022,68312,"pinery-bushfire, portugal-wildfire, santa-rosa-wildfire, socal-fire, woolsey-fire"
+flooding,4,1832,93996,"hurricane-florence, hurricane-harvey, midwest-flooding, nepal-flooding"
+wind,5,1471,99787,"hurricane-matthew, hurricane-michael, joplin-tornado, moore-tornado, tuscaloosa-tornado"
+volcano,2,314,4298,"guatemala-volcano, lower-puna-volcano"
+tsunami,2,303,60901,"palu-tsunami, sunda-tsunami"
+earthquake,1,159,43682,mexico-earthquake

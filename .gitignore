@@ -1,0 +1,23 @@
+# Data (too big, can be rebuilt with scripts/create_subset.py)
+/geotiffs/
+/xbd_subset/
+
+# Intermediate files made by the notebooks
+/cache/
+
+# Training outputs (checkpoints, logs). Keep them on Google Drive
+/runs/
+*.pt
+*.pth
+*.ckpt
+
+# Python and Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Optional: the map files are a few MB each (they include the plotly library)
+reports/eda/*.html

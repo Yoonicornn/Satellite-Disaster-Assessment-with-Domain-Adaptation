@@ -1,0 +1,4 @@
+split,tif files,json files,pre images,post images,pairs (pre+post),post images without label,post labels without image
+tier1,5598,5598,2799,2799,2799,0,0
+tier3,12738,12738,6369,6369,6369,0,0
+test,1866,1866,933,933,933,0,0
