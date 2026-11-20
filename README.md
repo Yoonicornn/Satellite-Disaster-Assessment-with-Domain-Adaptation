@@ -267,56 +267,78 @@ would reward a model that ignores the damaged classes.
 
 ---
 
-### 8. Results
+## 8. Results
 
-Setup. Macro-F1 from the best checkpoint on source_val. Crops 64x64, stratified group split with seed 8, ResNet-34 with ImageNet weights, weighted cross-entropy, AdamW. Target labels are used only by the oracle row.
+**Setup.** Macro-F1 from the best checkpoint on `source_val`. Crops 64x64, stratified group
+split with seed 8, ResNet-34 with ImageNet weights, weighted cross-entropy, AdamW.
+Target labels are used only by the oracle row.
 
-Regenerate every number below with notebooks/04_experiment_analysis.ipynb, section 6.
+Regenerate every number below with `notebooks/04_experiment_analysis.ipynb`, section 6.
 
-7.1 Main table — macro-F1
-Method source_val (us-central) target_test (us-south) test (caribbean) Runs
-Baseline (source only) 0.7242 0.5458 0.2308 1 seed, 50 epochs (preliminary)
-CORAL — — —
-DANN — — —
-Oracle (target labels) — — —
+### 8.1 Main table — macro-F1
 
-Fill in as mean ± std once three seeds are done. The baseline row is a single run at an epoch budget that is not final, so treat it as a sanity check, not a result.
+| Method | source_val (us-central) | target_test (us-south) | test (caribbean) | Runs |
+|---|---|---|---|---|
+| Baseline (source only) | 0.7242 | 0.5458 | 0.2308 | 1 seed, 50 epochs *(preliminary)* |
+| CORAL | — | — | — | |
+| DANN | — | — | — | |
+| Oracle (target labels) | — | — | — | |
 
-7.2 Domain gap — what is lost when the region changes
-Method source → target source → test
-Baseline −0.178 (−25 %) −0.493 (−68 %)
-CORAL — —
-DANN — —
-Oracle — —
+Fill in as `mean ± std` once three seeds are done. The baseline row is a single run at an epoch
+budget that is not final, so treat it as a sanity check, not a result.
 
-Less negative is better: it means the method kept more of its source performance on the new region. This is the table the project is actually about.
+### 8.2 Domain gap — what is lost when the region changes
 
-7.3 Per-class F1
+| Method | source → target | source → test |
+|---|---|---|
+| Baseline | −0.178 (−25 %) | −0.493 (−68 %) |
+| CORAL | — | — |
+| DANN | — | — |
+| Oracle | — | — |
 
-target_test:
+Less negative is better: it means the method kept more of its source performance on the new
+region. This is the table the project is actually about.
 
-Method no-damage minor major destroyed
-Baseline 0.821 0.453 0.375 0.534
-CORAL — — — —
-DANN — — — —
-Oracle — — — —
+### 8.3 Per-class F1
 
-test (caribbean):
+`target_test`:
 
-Method no-damage minor major destroyed
-Baseline 0.308 0.142 0.111 0.362
-CORAL — — — —
-DANN — — — —
-Oracle — — — —
-7.4 Error overlap against the baseline
+| Method | no-damage | minor | major | destroyed |
+|---|---|---|---|---|
+| Baseline | 0.821 | 0.453 | 0.375 | 0.534 |
+| CORAL | — | — | — | — |
+| DANN | — | — | — | — |
+| Oracle | — | — | — | — |
 
-From section 11 of the analysis notebook. A method can raise macro-F1 while breaking nearly as many buildings as it fixes, so report both.
+`test` (caribbean):
 
-Method split fixed broken net
-CORAL target_test — — —
-DANN target_test — — —
-CORAL test — — —
-DANN test — — —
+| Method | no-damage | minor | major | destroyed |
+|---|---|---|---|---|
+| Baseline | 0.308 | 0.142 | 0.111 | 0.362 |
+| CORAL | — | — | — | — |
+| DANN | — | — | — | — |
+| Oracle | — | — | — | — |
+
+### 8.4 Error overlap against the baseline
+
+From section 11 of the analysis notebook. A method can raise macro-F1 while breaking nearly as
+many buildings as it fixes, so report both.
+
+| Method | split | fixed | broken | net |
+|---|---|---|---|---|
+| CORAL | target_test | — | — | — |
+| DANN | target_test | — | — | — |
+| CORAL | test | — | — | — |
+| DANN | test | — | — | — |
+
+### 8.5 Run log
+
+| Method | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| baseline | done (50 ep) | — | — |
+| coral | — | — | — |
+| dann | — | — | — |
+| oracle | — | — | — |
 
 ---
 
