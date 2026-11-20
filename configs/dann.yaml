@@ -1,0 +1,10 @@
+# DANN. A gradient reversal layer plus a small discriminator that tries to tell
+# source from target. The ramp on lambda comes from the original paper.
+#   lambda_p = 2 / (1 + exp(-gamma * p)) - 1,  p = training progress from 0 to 1
+_base_: base.yaml
+
+method:
+  name: dann
+  lambda_max: 1.0      # value the ramp approaches
+  gamma: 10.0          # steepness of the ramp (paper value)
+  hidden: 256          # discriminator: 512 -> hidden -> 2

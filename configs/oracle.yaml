@@ -1,0 +1,7 @@
+# Upper bound. The only run allowed to use the target labels: trains on
+# source_train + target_train, both labelled. Paper 1's setting.
+# Not a method to compare against the others, a ceiling to measure them against.
+_base_: base.yaml
+
+method:
+  name: oracle

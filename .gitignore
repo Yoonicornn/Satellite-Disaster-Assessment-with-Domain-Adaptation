@@ -1,6 +1,7 @@
-# Data (too big, can be rebuilt with scripts/create_subset.py)
+# Data (too big, can be rebuilt with scripts/create_subset.py and extract_crops.py)
 /geotiffs/
 /xbd_subset/
+/crops/
 
 # Intermediate files made by the notebooks
 /cache/

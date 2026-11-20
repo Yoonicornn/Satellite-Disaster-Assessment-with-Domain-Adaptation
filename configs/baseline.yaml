@@ -1,0 +1,6 @@
+# Source only. ImageNet weights, trained on source_train, never sees the target.
+# This is the number the domain-adaptation runs have to beat.
+_base_: base.yaml
+
+method:
+  name: baseline

@@ -1,0 +1,9 @@
+# Deep CORAL. Adds a loss that matches the covariance of z between the source batch
+# and the unlabelled target batch. No new parameters.
+#   total = L_cls + lambda * ||C_s - C_t||_F^2 / (4 d^2)
+_base_: base.yaml
+
+method:
+  name: coral
+  lambda_weight: 1.0   # weight of the CORAL term; tune so both losses end up comparable
+  ramp_epochs: 5       # raise lambda from 0 over this many epochs, 0 = on from the start
