@@ -80,7 +80,9 @@ class Dann(Algorithm):
 
     def extra_loss(self, model, z_source, target_batch, device, *, epoch, progress):
         lam = dann_lambda(progress, self.cfg.method.gamma, self.cfg.method.lambda_max)
-        # separate forward pass for the target, so BatchNorm does not mix the two domains
+        # A separate forward pass for the target, so the two domains are not mixed inside one
+        # batch statistic. NOTE: BatchNorm's RUNNING statistics are still updated by target
+        # data here - see src/algorithms/bn_only.py, the control that measures that effect.
         z_target = model.features(target_batch["pre"].to(device, non_blocking=True),
                                   target_batch["post"].to(device, non_blocking=True))
 

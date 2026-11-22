@@ -8,6 +8,7 @@ To add a method: write a file here with a subclass of Algorithm, then add one li
 train.py does not need to change.
 """
 from .base import Algorithm, SourceOnly
+from .bn_only import BatchNormOnly
 from .coral import Coral, batch_covariance, coral_loss
 from .dann import Dann, DomainDiscriminator, dann_lambda, grad_reverse
 
@@ -16,6 +17,7 @@ from .dann import Dann, DomainDiscriminator, dann_lambda, grad_reverse
 REGISTRY = {
     "baseline": SourceOnly,
     "oracle": SourceOnly,
+    "bn_only": BatchNormOnly,
     "coral": Coral,
     "dann": Dann,
 }
@@ -29,7 +31,7 @@ def make_algorithm(cfg) -> Algorithm:
 
 
 __all__ = [
-    "Algorithm", "SourceOnly", "Coral", "Dann", "DomainDiscriminator",
+    "Algorithm", "SourceOnly", "BatchNormOnly", "Coral", "Dann", "DomainDiscriminator",
     "REGISTRY", "make_algorithm",
     "coral_loss", "batch_covariance", "dann_lambda", "grad_reverse",
 ]

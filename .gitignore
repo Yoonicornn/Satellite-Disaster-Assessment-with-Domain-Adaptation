@@ -2,6 +2,7 @@
 /geotiffs/
 /xbd_subset/
 /crops/
+/archive/
 
 # Intermediate files made by the notebooks
 /cache/

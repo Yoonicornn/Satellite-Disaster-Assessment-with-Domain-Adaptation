@@ -77,7 +77,7 @@ class OptimCfg(Section):
     amp: bool = True
     grad_clip: float = Field(default=0, ge=0, description="0 = off")
     early_stop: int = Field(default=0, ge=0,
-                            description="stop after N epochs with no improvement on eval.select_on; 0 = off")
+                            description="stop after N epochs with no improvement; 0 = off")
     min_epochs: int = Field(default=0, ge=0, description="never stop early before this epoch")
 
 
@@ -85,18 +85,27 @@ class EvalCfg(Section):
     select_on: str = Field(default="source_val", description="split used to pick the best epoch")
     select_metric: Literal["macro_f1", "accuracy"] = "macro_f1"
     splits: list[str] = Field(default=["source_val", "target_test", "test"])
+    track_splits: list[str] = Field(
+        default=[],
+        description="evaluated every epoch for the curves only - NEVER used to pick the best epoch")
     save_predictions: bool = True
 
     @model_validator(mode="after")
     def _selection_split_is_evaluated(self):
         if self.select_on not in self.splits:
             raise ValueError(f"select_on ({self.select_on!r}) must be one of splits ({self.splits})")
+        unknown = [s for s in self.track_splits if s not in self.splits]
+        if unknown:
+            raise ValueError(f"eval.track_splits {unknown} are not in eval.splits ({self.splits})")
+        if "target" in self.select_on or self.select_on == "test":
+            print(f"WARNING: eval.select_on is {self.select_on!r}. Choosing the best epoch with "
+                  "target labels invalidates an unsupervised domain-adaptation result.")
         return self
 
 
 class LogCfg(Section):
     tensorboard: bool = True
-    progress: bool = Field(default=True, description="tqdm progress bar (needs tqdm installed)")
+    progress: bool = Field(default=True, description="tqdm progress bar")
     every_n_steps: int = Field(default=50, gt=0)
     save_last_every_epoch: bool = True
 
@@ -110,6 +119,12 @@ class BaselineMethod(Section):
 
 class OracleMethod(Section):
     name: Literal["oracle"]
+
+
+class BnOnlyMethod(Section):
+    """Control: forwards target batches so BatchNorm adapts, but adds no loss. Separates
+    BatchNorm adaptation from what CORAL and DANN actually contribute."""
+    name: Literal["bn_only"]
 
 
 class CoralMethod(Section):
@@ -126,7 +141,7 @@ class DannMethod(Section):
 
 
 Method = Annotated[
-    Union[BaselineMethod, CoralMethod, DannMethod, OracleMethod],
+    Union[BaselineMethod, BnOnlyMethod, CoralMethod, DannMethod, OracleMethod],
     Field(discriminator="name"),
 ]
 
@@ -157,5 +172,6 @@ class ExperimentConfig(Section):
 
     @property
     def uses_target_unlabelled(self) -> bool:
-        """True for the two unsupervised domain-adaptation methods."""
-        return self.method.name in ("coral", "dann")
+        """True for every method whose training step needs an unlabelled target batch."""
+        from .data.crops import TARGET_METHODS          # one list, no second copy to drift
+        return self.method.name in TARGET_METHODS

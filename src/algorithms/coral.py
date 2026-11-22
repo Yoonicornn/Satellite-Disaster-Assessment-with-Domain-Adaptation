@@ -33,11 +33,21 @@ def batch_covariance(x):
 
 
 def coral_loss(z_source, z_target):
-    """Equation 1 of the paper. The 1/(4 d^2) keeps the value comparable across feature sizes,
-    so lambda does not need retuning when model.bottleneck changes."""
-    d = z_source.shape[1]
-    diff = batch_covariance(z_source) - batch_covariance(z_target)
-    return (diff * diff).sum() / (4.0 * d * d)
+    # Disable autocast for covariance computation.
+    with torch.autocast(
+        device_type=z_source.device.type,
+        enabled=False,
+    ):
+        source = z_source.float()
+        target = z_target.float()
+
+        if source.shape[1] != target.shape[1]:
+            raise ValueError("Source and target feature dimensions must match")
+
+        d = source.shape[1]
+        diff = batch_covariance(source) - batch_covariance(target)
+
+        return diff.square().sum() / (4.0 * d * d)
 
 
 class Coral(Algorithm):
@@ -57,9 +67,18 @@ class Coral(Algorithm):
 
     def extra_loss(self, model, z_source, target_batch, device, *, epoch, progress):
         lam = self.weight(epoch)
-        # a separate forward pass for the target, so BatchNorm keeps the two domains' statistics
-        # apart instead of mixing them into a hidden form of adaptation
+        # A separate forward pass for the target, so the two domains are not mixed inside one
+        # batch statistic. NOTE: this does NOT stop BatchNorm's RUNNING statistics from being
+        # updated by target data - that is an adaptation effect the baseline does not get.
+        # The bn_only run exists to measure it.
         z_target = model.features(target_batch["pre"].to(device, non_blocking=True),
                                   target_batch["post"].to(device, non_blocking=True))
+
         raw = coral_loss(z_source, z_target)
-        return lam * raw, {"extra_loss": raw.detach().item(), "lambda": lam}
+        weighted = lam * raw
+
+        return weighted, {
+            "coral_raw": raw.detach().item(),
+            "extra_loss": weighted.detach().item(),
+            "lambda": lam,
+        }

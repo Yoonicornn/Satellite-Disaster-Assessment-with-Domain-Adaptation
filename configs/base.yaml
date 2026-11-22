@@ -3,14 +3,18 @@
 # on the command line instead:  --set run.seed=1
 
 run:
-  name: null                  # null -> "<method>_seed<seed>"
-  out_dir: runs               # runs/<name>/ holds checkpoints, logs and the resolved config
+  out_dir: runs               # every run lands in runs/<group>/<name>/
+  group: null                 # null -> the method name
+  name: null                  # null -> "seed<seed>_<YYYYmmdd-HHMMSS>"
+  timestamp: true
   seed: 0                     # changes the model init and the data order, NEVER the split
 
 data:
   crops_dir: crops/wind_64    # folder made by scripts/extract_crops.py
   max_black: 0.5              # drop crops more than this share of no-data pixels (0.06 % of them)
-  batch_size: 64              # source batch; the target batch has the same size
+  batch_size: 128             # source batch; the target batch has the same size.
+                              # CORAL estimates a bottleneck x bottleneck covariance from ONE
+                              # batch, so a small batch makes that estimate mostly noise.
   workers: 2
   aug:                        # geometric only, applied identically to the pre and post crop
     hflip: true
@@ -23,7 +27,8 @@ model:
   pretrained: true            # ImageNet weights
   fusion: concat_diff         # concat_diff -> [f_pre, f_post, f_post - f_pre] (1536)
                               # concat      -> [f_pre, f_post]                 (1024)
-  bottleneck: 512             # size of z, the feature CORAL and DANN align
+  bottleneck: 256             # size of z, the feature CORAL and DANN align. Held below
+                              # data.batch_size so CORAL's covariance is not rank-starved.
   dropout: 0.3
 
 loss:
@@ -31,25 +36,28 @@ loss:
 
 optim:
   name: adamw
-  lr: 2.0e-4                  # new layers (paper 2's value)
+  lr: 2.0e-4                  # new layers (paper 2's value: https://arxiv.org/html/2401.17271v1#S2)
   backbone_lr: 2.0e-5         # pretrained layers, 10x lower
   weight_decay: 1.0e-6
   epochs: 25
   scheduler: cosine           # cosine | step | none
   amp: true                   # mixed precision; ignored on CPU
   grad_clip: 0                # 0 = off
+  early_stop: 0
+  min_epochs: 0
 
 method:
-  name: baseline              # baseline | coral | dann | oracle
+  name: baseline              # baseline | bn_only | coral | dann | oracle
 
 eval:
   select_on: source_val       # the best epoch is chosen here, NEVER with target labels
   select_metric: macro_f1
   splits: [source_val, target_test, test]
+  track_splits: [target_test]   # curves only, never used to select the best epoch -> give [] if we want to skip target test evaluation at every epoch
   save_predictions: true      # per-building CSV, used by the prediction figures
 
 log:
   tensorboard: true
-  progress: true             # tqdm bar during each epoch; set false for a quiet log file
+  progress: true
   every_n_steps: 50
   save_last_every_epoch: true # so --resume works after a Colab disconnect

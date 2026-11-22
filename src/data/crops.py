@@ -29,7 +29,11 @@ IGNORE_LABEL = -1
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
-METHODS = ("baseline", "coral", "dann", "oracle")
+METHODS = ("baseline", "bn_only", "coral", "dann", "oracle")
+
+# methods whose training step needs an unlabelled target batch. bn_only is in here
+# because it must forward target images for BatchNorm, even though it adds no loss.
+TARGET_METHODS = ("bn_only", "coral", "dann")
 
 
 # ----------------------------------------------------------------------------- augmentation
@@ -214,7 +218,7 @@ def make_datasets(crops_dir, method, max_black=0.5, aug: AugConfig | None = None
         train = source_train
         train_labels = source_train.labels
         target = (CropDataset(split="target_train", train=True, use_labels=False, aug=aug, **common)
-                  if method in ("coral", "dann") else None)
+                  if method in TARGET_METHODS else None)
 
     evaluation = {s: CropDataset(split=s, train=False, use_labels=True, **common)
                   for s in ("source_val", "target_test", "test")}

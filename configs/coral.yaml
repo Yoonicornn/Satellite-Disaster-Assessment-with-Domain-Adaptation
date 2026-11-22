@@ -5,5 +5,5 @@ _base_: base.yaml
 
 method:
   name: coral
-  lambda_weight: 1.0   # weight of the CORAL term; tune so both losses end up comparable
-  ramp_epochs: 5       # raise lambda from 0 over this many epochs, 0 = on from the start
+  lambda_weight: 40.0 # weight of the CORAL term; tune so both losses end up comparable
+  ramp_epochs: 5 # raise lambda from 0 over this many epochs, 0 = on from the start

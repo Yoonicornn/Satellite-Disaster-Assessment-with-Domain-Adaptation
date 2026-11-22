@@ -1,17 +1,18 @@
 # Satellite-Disaster-Assessment-with-Domain-Adaptation
 
 Final project (ECSE552). We classify the damage level of individual buildings from pre- and
-post-disaster satellite images (xBD dataset), and test whether domain adaptation helps when the
-model is moved to a **new geographic region**.
+post-disaster satellite images (xBD dataset), and test whether unsupervised domain adaptation
+helps when the model is moved to a **new geographic region**.
 
 - **Task**: 4-class building damage classification (no-damage, minor, major, destroyed).
-- **Domains**: three US/Caribbean regions, taken from wind disasters (tornadoes and hurricanes).
-- **Methods compared**: source-only baseline, CORAL, DANN, and a target-supervised upper bound.
+- **Domains**: three US/Caribbean regions, all from wind disasters (tornadoes and hurricanes).
+- **Methods compared**: source-only baseline, a BatchNorm-only control, CORAL, DANN.
 
-This README describes the project **as it is now**: the folder structure, how the data was prepared, and the commands to run. Training code is not written yet (see [Next steps](#next-steps)).
+For the reasoning behind every decision and all measured numbers, see **[analysis.md](analysis.md)**.
 
-For the reasoning behind every decision (why wind, why these splits, why this architecture),
-see **[analysis.md](analysis.md)**.
+**Short version of the result**: neither CORAL nor DANN improved transfer. The only thing that
+helped was BatchNorm statistics adapting to the target, which happens for free inside CORAL and
+DANN and has nothing to do with their loss. See [section 8](#8-results).
 
 ---
 
@@ -28,10 +29,13 @@ crops/wind_64/       5 numpy arrays + manifest.csv        <- what training reads
    |  src/train.py                      one method, one seed
    v
 runs/<method>/seed<N>_<timestamp>/      checkpoints, metrics, predictions, TensorBoard
+   |  scripts/summarize.py              mean +/- std across seeds
+   |  src/domain_probe.py               how separable the domains are in feature space
+   v
+notebooks/04_experiment_analysis.ipynb  curves, tables, confusion matrices, prediction figures
 ```
 
-The crop step exists because opening two 1024x1024 GeoTIFFs for every building would dominate
-training time. It is paid once (82 seconds) instead of every epoch.
+Crops are cut once (82 seconds) instead of opening two 1024x1024 GeoTIFFs on every sample.
 
 ---
 
@@ -41,50 +45,53 @@ training time. It is paid once (82 seconds) instead of every epoch.
 Satellite-Disaster-Assessment-with-Domain-Adaptation/
 ├── configs/
 │   ├── base.yaml              shared settings for every run
-│   ├── baseline.yaml          method configs, each one overrides only what it needs
+│   ├── baseline.yaml          method configs, each overrides only what it needs
+│   ├── bn_only.yaml
 │   ├── coral.yaml
 │   ├── dann.yaml
-│   ├── oracle.yaml
+│   ├── oracle.yaml            not used in the final experiment
 │   └── event_location.json    event name -> our location label
 ├── crops/wind_64/             output of extract_crops.py            (git-ignored)
 ├── geotiffs/                  raw xBD data                          (git-ignored)
 ├── notebooks/
 │   ├── view_samples.ipynb              pre/post tiles with building outlines
-│   ├── 01_eda.ipynb                    counts, class balance, metadata, subset planner
+│   ├── 01_eda.ipynb                    counts, class balance, metadata
 │   ├── 02_event_map.ipynb              world map of the events
 │   ├── 03_view_crops.ipynb             the crops, by class / domain / event
-|   └── 04_experiment_analysis.ipynb    compare runs: curves, tables, errors, display predicted versus ground true image
-├── reports/eda/               figures and tables for the report
+│   └── 04_experiment_analysis.ipynb    compare runs: curves, tables, errors, prediction figures
+├── reports/                   figures and tables for the report
 ├── runs/                      training outputs                      (git-ignored)
 ├── scripts/
 │   ├── create_subset.py       raw xBD -> xbd_subset/<type>/
-│   └── extract_crops.py       xbd_subset -> crops/<type>_<size>/ + the splits
+│   ├── extract_crops.py       xbd_subset -> crops/<type>_<size>/ + the splits
+│   ├── run_grid.sh            every method x every seed, with skip/resume
+│   └── summarize.py           runs/*/*/metrics.json -> mean +/- std table
 ├── src/
 │   ├── config.py              YAML loading, _base_ inheritance, --set overrides
 │   ├── config_schema.py       pydantic schema: the only place a config key is allowed
 │   ├── metrics.py             macro-F1, per-class F1/recall, confusion matrix
 │   ├── train.py               the training loop
+│   ├── domain_probe.py        domain separability of a trained run's features
 │   ├── algorithms/            one file per training method
 │   │   ├── base.py            Algorithm interface + SourceOnly
+│   │   ├── bn_only.py         the BatchNorm control
 │   │   ├── coral.py
 │   │   └── dann.py
 │   ├── data/crops.py          Dataset, augmentation, class weights, split wiring
 │   └── models/siamese.py      the shared network
 ├── xbd_subset/wind/           output of create_subset.py            (git-ignored)
-├── ai_build.md                decisions, measurements and rationale
+├── analysis.md                decisions, measurements and findings
 └── README.md
 ```
 
-**Keep out of git** (too big or can be rebuilt): `geotiffs/`, `xbd_subset/`, `cache/`, `runs/`. Add them to `.gitignore`.
+**Keep out of git**: `geotiffs/`, `xbd_subset/`, `crops/`, `runs/`.
 
-All commands below are run **from the project root** (the folder that contains `scripts/`, `notebooks/`, ...).
+All commands are run **from the project root**.
 
 ---
 
 ## 3. Environment
 
-Check list of libraries in requirement.txt
-OR
 Conda environment `ecse552`, Python 3.10.
 
 ```bash
@@ -99,52 +106,7 @@ conda-forge packages gives `OMP: Error #15` on macOS, because each ships its own
 
 ---
 
-## 4. The data (xBD)
-
-Source: https://xview2.org/dataset (xView2 / xBD, "Full datasets with GEOTIFF metadata").
-
-### 4.1 Download and extract (done once)
-
-1. Download the 6 parts (`part 1/aa` ... `part 6/af`, about 51 GB compressed in total).
-2. Check each file with the SHA1 given on the website (run in the folder with the files):
-   ```bash
-   shasum -a 1 <file name>
-   ```
-   The result must be the same as the SHA1 on the page. If not, download that part again.
-3. Merge the parts, then extract (the file names are the ones written on the website, section 3):
-   ```bash
-   cat xview2_geotiff.tgz.part-a? > xview2_geotiff.tgz
-   tar -xvzf xview2_geotiff.tgz
-   ```
-   You need free disk space for the merged file (about 51 GB) and for the extracted data.
-4. Put the extracted `geotiffs/` folder in the project root. After the extraction the parts and the merged `.tgz` can be deleted.
-
-### 4.2 What is in `geotiffs/`
-
-- Four folders: `tier1`, `tier3`, `test`, `hold`. Each has `images/` (GeoTIFF) and `labels/` (JSON).
-- File names: `<event>_<number>_<pre|post>_disaster.<tif|json>`, for example `joplin-tornado_00000060_post_disaster.tif`. An **event** is one disaster (for example `joplin-tornado`).
-- Every image has a **pre-disaster** and a **post-disaster** version, and a label file for each.
-- About the folders (source: a research paper that uses xBD, not the official xView2 documentation): `tier1` + `tier3` = training set, `hold` = validation set, `test` = test set. Some events are only in `tier3`, and some are in `tier1` + `test`.
-
-### 4.3 Label JSON files
-
-- `features.xy`: list of buildings. Each building has a polygon (`wkt`, in **pixel** coordinates) and `properties` (`feature_type`, `uid`, `subtype`).
-- `features.lng_lat`: the same polygons in longitude/latitude.
-- `metadata`: sensor, capture date, off-nadir angle, sun elevation/azimuth, `disaster`, `disaster_type`, image width/height, `catalog_id`, and others.
-- The **damage label is `subtype`** and it exists **only in the post-disaster file**. Values found in the data: `no-damage`, `minor-damage`, `major-damage`, `destroyed`, `un-classified`. The pre-disaster file has the building outlines but no damage label.
-- Disaster types found in the data (`disaster_type`): fire, flooding, wind, volcano, tsunami, earthquake.
-
-### 4.4 What we found in the EDA (tier1 + tier3 + test)
-
-- 10,101 image pairs, 370,976 buildings, 19 events (`hold` was not included in the EDA).
-- Buildings per damage class: no-damage 275,062 (74.1%), minor 30,522, major 25,299, destroyed 27,337, un-classified 12,756. The classes are very imbalanced, so we use per-class recall and macro-F1, not only accuracy.
-- The class mix is very different from one event to another (for example `hurricane-matthew` has 52% minor-damage and 18% no-damage, `mexico-earthquake` has 99% no-damage).
-- Many fire images have no building at all (48% to 74% of the images in 4 fire events).
-- Some images have black areas (empty pixels, probably where the satellite scene does not cover the whole tile). We have not measured how common this is yet.
-
----
-
-## 5. Getting the data
+## 4. Getting the data
 
 Source: <https://xview2.org/dataset> ("Full datasets with GEOTIFF metadata").
 
@@ -161,11 +123,12 @@ Source: <https://xview2.org/dataset> ("Full datasets with GEOTIFF metadata").
    `hold`, each with `images/` (GeoTIFF) and `labels/` (JSON).
 
 File names are `<event>_<number>_<pre|post>_disaster.<tif|json>`. The damage label is the
-`subtype` field and exists **only in the post-disaster JSON**.
+`subtype` field in the **post-disaster JSON only**. Values: `no-damage`, `minor-damage`,
+`major-damage`, `destroyed`, `un-classified`.
 
 ---
 
-## 6. Running the pipeline
+## 5. Running the pipeline
 
 ### Step 1 — build the subset (once)
 
@@ -174,10 +137,7 @@ python scripts/create_subset.py --disaster-type wind --location-map configs/even
 ```
 
 Produces `xbd_subset/wind/` with the five wind events and three manifests: `buildings.csv`
-(one row per building, the one that matters), `images.csv`, `events.csv`.
-
-Add `--dry-run` to see what would be copied, or `--tar` to also write `xbd_subset/wind.tar.gz`
-for sharing through Google Drive.
+(the one that matters), `images.csv`, `events.csv`.
 
 ### Step 2 — cut the crops and fix the splits (once)
 
@@ -188,43 +148,35 @@ python scripts/extract_crops.py --seed 8               # the real run, ~82 s
 
 Produces `crops/wind_64/` with five splits:
 
-| Split          | Buildings | Role                                           |
-| -------------- | --------- | ---------------------------------------------- |
-| `source_train` | 31,360    | labelled training data                         |
-| `source_val`   | 5,705     | picks the best epoch, never uses target labels |
-| `target_train` | 41,299    | **unlabelled** during training (CORAL / DANN)  |
-| `target_test`  | 7,924     | evaluation only — the main result              |
-| `test`         | 22,628    | caribbean, held out, evaluation only           |
+| Split          | Buildings | Used in training | Role                                           |
+| -------------- | --------- | ---------------- | ---------------------------------------------- |
+| `source_train` | 31,339    | yes, labelled    | training data                                  |
+| `source_val`   | 5,699     | no               | picks the best epoch, never uses target labels |
+| `target_train` | 41,272    | yes, unlabelled  | target batches for bn_only / CORAL / DANN      |
+| `target_test`  | 7,920     | no               | evaluation only — the main result              |
+| `test`         | 22,617    | no               | caribbean, held out, hardest case              |
 
-`--size 128` writes a separate `crops/wind_128/` if you want to compare crop sizes.
+Counts are after the Dataset drops 69 crops that are more than half no-data pixels.
+The split is **fixed for every run**; `run.seed` changes only the model init and data order.
 
-### Step 3 — look at the crops (optional)
-
-Open `notebooks/03_view_crops.ipynb`. Section 6 (the same damage class across the three
-domains) is the figure to use in the report.
-
-### Step 4 — train
-
-```bash
-python -m src.train --config configs/baseline.yaml --set run.seed=0
-python -m src.train --config configs/coral.yaml    --set run.seed=0
-python -m src.train --config configs/dann.yaml     --set run.seed=0
-python -m src.train --config configs/oracle.yaml   --set run.seed=0
-```
+### Step 3 — train
 
 The full grid, 4 methods x 3 seeds:
 
 ```bash
-for m in baseline coral dann oracle; do
-  for s in 0 1 2; do
-    python -m src.train --config configs/$m.yaml --set run.seed=$s
-  done
-done
+METHODS="baseline bn_only coral dann" SEEDS="3 1 14" EPOCHS=25 \
+  nohup caffeinate -i bash scripts/run_grid.sh > logs/grid.log 2>&1 &
 ```
 
-Each run writes to `runs/<method>/seed<N>_<timestamp>/`, so nothing is ever overwritten.
+`PLAN_ONLY=1` prints the plan and a time estimate without running anything. Finished runs are
+skipped, so re-launching continues where it stopped. About 8 hours for all twelve on an Apple
+Silicon Mac.
 
-Useful flags:
+One run at a time:
+
+```bash
+python -m src.train --config configs/baseline.yaml --set run.seed=3
+```
 
 | Flag                      | Meaning                                                 |
 | ------------------------- | ------------------------------------------------------- |
@@ -239,14 +191,53 @@ Check a config without training:
 python -m src.config --config configs/dann.yaml --set run.seed=1
 ```
 
-### Step 5 — monitor
+### Step 4 — monitor
 
 ```bash
+grep -E "^---|done in|FAILED" logs/grid.log     # which runs are done
+wc -l runs/*/*/history.csv                      # 26 lines = finished
 tensorboard --logdir runs --port 6007
 ```
 
-Runs appear grouped by method. Everything is also written to `history.csv` in each run folder,
-so TensorBoard is optional.
+### Step 5 — read the results
+
+```bash
+python scripts/summarize.py --csv results.csv
+```
+
+Prints every run, mean +/- std per method, and the decomposition
+`baseline -> bn_only -> coral/dann`. Then open
+`notebooks/04_experiment_analysis.ipynb` for curves, confusion matrices and prediction figures.
+
+Domain separability of a finished run:
+
+```bash
+python -m src.domain_probe --run runs/baseline/seed3_* --pairs source_train:target_train
+```
+
+---
+
+## 6. The four runs
+
+| Config     | Sees target images | Target loss      | Target labels | Role                    |
+| ---------- | ------------------ | ---------------- | ------------- | ----------------------- |
+| `baseline` | no                 | —                | no            | the number to beat      |
+| `bn_only`  | yes                | **zero**         | no            | control: BatchNorm only |
+| `coral`    | yes                | covariance match | no            | unsupervised DA         |
+| `dann`     | yes                | adversarial      | no            | unsupervised DA         |
+
+`bn_only` exists because CORAL and DANN forward target batches in train mode, which updates every
+BatchNorm layer's running statistics with target data. That is free adaptation (AdaBN) and has
+nothing to do with their loss. The control forwards the same batches and adds a loss of zero, so
+the two effects can be told apart:
+
+```
+baseline -> bn_only      what BatchNorm adaptation is worth on its own
+bn_only  -> coral/dann   what the alignment loss actually adds
+```
+
+`oracle` (trained on labelled target data) was dropped from the final experiment. Its config is
+still in the repo.
 
 ---
 
@@ -258,98 +249,100 @@ so TensorBoard is optional.
 | `best.pt`                 | best epoch on `source_val` macro-F1             |
 | `last.pt`                 | written every epoch; what `--resume` reads      |
 | `history.csv`             | one row per epoch                               |
-| `metrics.json`            | final numbers for all three splits              |
+| `metrics.json`            | final numbers for all three splits, plus timing |
 | `predictions_<split>.csv` | per-building prediction and class probabilities |
 | `tb/`                     | TensorBoard event file                          |
 
-Primary metric is **macro-F1**, because 74 % of the buildings are no-damage and plain accuracy
-would reward a model that ignores the damaged classes.
+Primary metric is **macro-F1**, because 74 % of the source buildings are no-damage and plain
+accuracy would reward a model that ignores the damaged classes.
 
 ---
 
 ## 8. Results
 
-**Setup.** Macro-F1 from the best checkpoint on `source_val`. Crops 64x64, stratified group
-split with seed 8, ResNet-34 with ImageNet weights, weighted cross-entropy, AdamW.
-Target labels are used only by the oracle row.
+**Setup.** 3 seeds (1, 3, 14), 25 epochs, best checkpoint on `source_val` macro-F1.
+Crops 64x64, stratified group split with seed 8, ResNet-34 with ImageNet weights, bottleneck 256,
+batch 128, weighted cross-entropy, AdamW. No target labels are used anywhere.
 
-Regenerate every number below with `notebooks/04_experiment_analysis.ipynb`, section 6.
+Regenerate with `python scripts/summarize.py`.
 
-### 8.1 Main table — macro-F1
+### 8.1 Main table — macro-F1, mean ± std over 3 seeds
 
-| Method | source_val (us-central) | target_test (us-south) | test (caribbean) | Runs |
-|---|---|---|---|---|
-| Baseline (source only) | 0.7242 | 0.5458 | 0.2308 | 1 seed, 50 epochs *(preliminary)* |
-| CORAL | — | — | — | |
-| DANN | — | — | — | |
-| Oracle (target labels) | — | — | — | |
+| Method                 | source_val (us-central) | target_test (us-south) | test (caribbean)    |
+| ---------------------- | ----------------------- | ---------------------- | ------------------- |
+| Baseline (source only) | 0.7116 ± 0.0039         | 0.5335 ± 0.0035        | 0.2168 ± 0.0045     |
+| **bn_only (control)**  | **0.7207** ± 0.0028     | **0.5350** ± 0.0024    | **0.2356** ± 0.0080 |
+| CORAL                  | 0.7166 ± 0.0030         | 0.5317 ± 0.0030        | 0.2235 ± 0.0105     |
+| DANN                   | 0.7130 ± 0.0028         | 0.5320 ± 0.0042        | 0.2274 ± 0.0084     |
 
-Fill in as `mean ± std` once three seeds are done. The baseline row is a single run at an epoch
-budget that is not final, so treat it as a sanity check, not a result.
+### 8.2 What each part contributes
 
-### 8.2 Domain gap — what is lost when the region changes
+The baseline's own seed-to-seed spread is the bar. Anything smaller is not a result.
 
-| Method | source → target | source → test |
-|---|---|---|
-| Baseline | −0.178 (−25 %) | −0.493 (−68 %) |
-| CORAL | — | — |
-| DANN | — | — |
-| Oracle | — | — |
+| Split       | baseline sd | BatchNorm (baseline → bn_only) | CORAL loss (bn_only → coral) | DANN loss (bn_only → dann) |
+| ----------- | ----------- | ------------------------------ | ---------------------------- | -------------------------- |
+| source_val  | 0.0039      | **+0.0091** above noise        | −0.0041 worse                | −0.0077 worse              |
+| target_test | 0.0035      | +0.0015 within noise           | −0.0033 within noise         | −0.0030 within noise       |
+| test        | 0.0045      | **+0.0188** above noise        | −0.0120 worse                | −0.0082 worse              |
 
-Less negative is better: it means the method kept more of its source performance on the new
-region. This is the table the project is actually about.
+On `source_val` and `test` the separation is complete, not just a difference of means — every
+`bn_only` seed beats every `baseline` seed.
 
-### 8.3 Per-class F1
+### 8.3 Domain gap — what is lost when the region changes
 
-`target_test`:
+| Method   | source → target   | source → test     |
+| -------- | ----------------- | ----------------- |
+| Baseline | −0.1781 (−25.0 %) | −0.4948 (−69.5 %) |
+| bn_only  | −0.1857 (−25.8 %) | −0.4851 (−67.3 %) |
+| CORAL    | −0.1849 (−25.8 %) | −0.4931 (−68.8 %) |
+| DANN     | −0.1810 (−25.4 %) | −0.4856 (−68.1 %) |
 
-| Method | no-damage | minor | major | destroyed |
-|---|---|---|---|---|
-| Baseline | 0.821 | 0.453 | 0.375 | 0.534 |
-| CORAL | — | — | — | — |
-| DANN | — | — | — | — |
-| Oracle | — | — | — | — |
+No method meaningfully narrowed either gap.
 
-`test` (caribbean):
+### 8.4 The caribbean failure
 
-| Method | no-damage | minor | major | destroyed |
-|---|---|---|---|---|
-| Baseline | 0.308 | 0.142 | 0.111 | 0.362 |
-| CORAL | — | — | — | — |
-| DANN | — | — | — | — |
-| Oracle | — | — | — | — |
+Predicted class shares against the truth, on `test` (22,617 buildings):
 
-### 8.4 Error overlap against the baseline
+| Class        | Actual     | Baseline   | CORAL  | DANN   |
+| ------------ | ---------- | ---------- | ------ | ------ |
+| no-damage    | 17.9 %     | 27.1 %     | 18.8 % | 18.0 % |
+| minor-damage | **54.5 %** | **5.3 %**  | 5.3 %  | 5.6 %  |
+| major-damage | 12.0 %     | 3.6 %      | 7.6 %  | 8.6 %  |
+| destroyed    | **15.6 %** | **64.0 %** | 68.4 % | 67.8 % |
 
-From section 11 of the analysis notebook. A method can raise macro-F1 while breaking nearly as
-many buildings as it fixes, so report both.
+The model calls two-thirds of the island destroyed when a sixth of it is. Of the 15,570
+buildings every method gets wrong, **10,844 are minor-damage** — 88 % of all minor-damage
+buildings in the split.
 
-| Method | split | fixed | broken | net |
-|---|---|---|---|---|
-| CORAL | target_test | — | — | — |
-| DANN | target_test | — | — | — |
-| CORAL | test | — | — | — |
-| DANN | test | — | — | — |
+### 8.5 Error overlap on `test`
 
-### 8.5 Run log
+A method can raise macro-F1 while breaking nearly as many buildings as it fixes.
 
-| Method | seed 0 | seed 1 | seed 2 |
-|---|---|---|---|
-| baseline | done (50 ep) | — | — |
-| coral | — | — | — |
-| dann | — | — | — |
-| oracle | — | — | — |
+| Method   | correct | accuracy | fixed | broken | net  |
+| -------- | ------- | -------- | ----- | ------ | ---- |
+| Baseline | 5,575   | 0.2465   | —     | —      | —    |
+| CORAL    | 5,707   | 0.2523   | 1,042 | 910    | +132 |
+| DANN     | 5,686   | 0.2514   | 1,013 | 902    | +111 |
+
+Every method wrong: 15,570 (68.8 %). Every method right: 4,377 (19.4 %).
+
+### 8.6 Run log
+
+All twelve finished, 25 epochs each.
+
+| Method   | seed 1 | seed 3 | seed 14 | minutes/run |
+| -------- | ------ | ------ | ------- | ----------- |
+| baseline | 0.5376 | 0.5316 | 0.5314  | 26          |
+| bn_only  | 0.5334 | 0.5339 | 0.5378  | 33          |
+| coral    | 0.5350 | 0.5313 | 0.5289  | 48          |
+| dann     | 0.5364 | 0.5280 | 0.5318  | 48          |
+
+(`target_test` macro-F1.)
 
 ---
 
 ## 9. Status
 
-Done: subset creation, crop extraction and splits, Dataset, model, all four algorithms,
-training loop with checkpoints and resume, evaluation with per-building predictions.
-
-Open:
-
-- [ ] Choose the final `optim.epochs` from a long baseline run, then use it for all 12 runs.
-- [ ] Run the full grid (Colab recommended; the Mac takes about 15 hours at 25 epochs).
-- [ ] Prediction figures notebook (ground truth vs predicted, from `predictions_*.csv`).
-- [ ] Aggregation script: mean ± std across seeds, for the results table.
+**Done**: subset creation, crops and splits, Dataset, model, four algorithms, training loop with
+checkpoints and resume, evaluation with per-building predictions, the full 12-run grid,
+aggregation script, domain probe, analysis notebook.

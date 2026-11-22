@@ -1,0 +1,7 @@
+# The control. Target images pass through the network so BatchNorm adapts to them, but no
+# extra loss is added. Run this alongside baseline/coral/dann: without it you cannot tell
+# BatchNorm adaptation apart from what CORAL and DANN actually contribute.
+_base_: base.yaml
+
+method:
+  name: bn_only
