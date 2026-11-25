@@ -9,6 +9,7 @@ train.py does not need to change.
 """
 from .base import Algorithm, SourceOnly
 from .bn_only import BatchNormOnly
+from .cdan import Cdan, ConditionalDiscriminator, multilinear_map
 from .coral import Coral, batch_covariance, coral_loss
 from .dann import Dann, DomainDiscriminator, dann_lambda, grad_reverse
 
@@ -20,6 +21,7 @@ REGISTRY = {
     "bn_only": BatchNormOnly,
     "coral": Coral,
     "dann": Dann,
+    "cdan": Cdan,
 }
 
 
@@ -31,7 +33,7 @@ def make_algorithm(cfg) -> Algorithm:
 
 
 __all__ = [
-    "Algorithm", "SourceOnly", "BatchNormOnly", "Coral", "Dann", "DomainDiscriminator",
+    "Algorithm", "SourceOnly", "BatchNormOnly", "Coral", "Dann", "Cdan", "DomainDiscriminator", "ConditionalDiscriminator",
     "REGISTRY", "make_algorithm",
-    "coral_loss", "batch_covariance", "dann_lambda", "grad_reverse",
+    "coral_loss", "batch_covariance", "multilinear_map", "dann_lambda", "grad_reverse",
 ]

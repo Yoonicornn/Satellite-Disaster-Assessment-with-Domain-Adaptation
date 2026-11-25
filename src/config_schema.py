@@ -56,11 +56,35 @@ class DataCfg(Section):
 
 
 class ModelCfg(Section):
-    backbone: Literal["resnet18", "resnet34", "resnet50"] = "resnet34"
+    backbone: Literal["resnet18", "resnet34", "resnet50",
+                      "dinov2_vits14", "dinov2_vitb14"] = "resnet34"
     pretrained: bool = True
     fusion: Literal["concat_diff", "concat"] = "concat_diff"
-    bottleneck: int = Field(default=512, gt=0, description="size of z, the feature DA aligns")
+    bottleneck: int = Field(default=256, gt=0, description="size of z, the feature DA aligns")
     dropout: float = Field(default=0.3, ge=0, lt=1)
+    input_size: int | None = Field(
+        default=None, gt=0,
+        description="resize crops to this before the encoder; null = use them at 64x64. "
+                    "Required and must be a multiple of 14 for the dinov2 backbones.")
+    vit_pool: Literal["cls", "cls+avg"] = Field(
+        default="cls+avg",
+        description="dinov2 only: class token, or class token concatenated with the mean "
+                    "patch token (the usual linear-probe read-out)")
+    trainable_blocks: int = Field(
+        default=-1, ge=-1,
+        description="-1 trains the whole encoder, 0 freezes it, n trains the last n blocks "
+                    "(resnet groups: stem, layer1..layer4; dinov2: transformer blocks)")
+
+    @model_validator(mode="after")
+    def _backbone_needs_input_size(self):
+        if self.backbone.startswith("dinov2"):
+            if self.input_size is None:
+                raise ValueError(f"{self.backbone} has patch size 14, so model.input_size must "
+                                 f"be set to a multiple of 14 (70, 126 or 224)")
+            if self.input_size % 14:
+                raise ValueError(f"model.input_size must be a multiple of 14 for "
+                                 f"{self.backbone}, got {self.input_size}")
+        return self
 
 
 class LossCfg(Section):
@@ -140,8 +164,20 @@ class DannMethod(Section):
     hidden: int = Field(default=256, gt=0, description="discriminator: z -> hidden -> 2")
 
 
+class CdanMethod(Section):
+    """CDAN: the discriminator sees the outer product of z and the predicted class
+    distribution, so the encoder aligns p(z|y) rather than p(z)."""
+    name: Literal["cdan"]
+    lambda_max: float = Field(default=1.0, gt=0, description="value the ramp approaches")
+    gamma: float = Field(default=10.0, gt=0, description="steepness of the ramp (paper value)")
+    hidden: int = Field(default=256, gt=0, description="discriminator: (bottleneck*4) -> hidden -> hidden -> 2")
+    entropy: bool = Field(default=False,
+                          description="CDAN+E: weight examples by prediction confidence. "
+                                      "Risky here - the model is confidently wrong on caribbean")
+
+
 Method = Annotated[
-    Union[BaselineMethod, BnOnlyMethod, CoralMethod, DannMethod, OracleMethod],
+    Union[BaselineMethod, BnOnlyMethod, CoralMethod, DannMethod, CdanMethod, OracleMethod],
     Field(discriminator="name"),
 ]
 

@@ -29,11 +29,11 @@ IGNORE_LABEL = -1
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
-METHODS = ("baseline", "bn_only", "coral", "dann", "oracle")
+METHODS = ("baseline", "bn_only", "coral", "dann", "cdan", "oracle")
 
 # methods whose training step needs an unlabelled target batch. bn_only is in here
 # because it must forward target images for BatchNorm, even though it adds no loss.
-TARGET_METHODS = ("bn_only", "coral", "dann")
+TARGET_METHODS = ("bn_only", "coral", "dann", "cdan")
 
 
 # ----------------------------------------------------------------------------- augmentation

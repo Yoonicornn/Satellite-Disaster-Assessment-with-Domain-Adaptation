@@ -1,0 +1,23 @@
+# Source-only baseline with a DINOv2 ViT-S/14 encoder instead of ResNet-34.
+#
+# Read before running:
+#   * DINOv2 has patch size 14, so input_size must be a multiple of 14. 126 gives 81 patch
+#     tokens at about 6x the compute of ResNet-34 at 64x64; 224 gives 256 tokens at about 21x.
+#     Start at 126 on a laptop, 224 on a GPU.
+#   * A ViT uses LayerNorm, which keeps no running statistics, so the bn_only control measures
+#     nothing here and CORAL/DANN get no free BatchNorm adaptation.
+#   * Comparing against the ResNet-34 numbers means re-running every method, not just this one.
+_base_: base.yaml
+
+run:
+  group: baseline_dinov2      # its own folder, so it never mixes with the
+                              # resnet baseline in runs/baseline/
+
+model:
+  backbone: dinov2_vits14
+  input_size: 126             # 70 | 126 | 224
+  vit_pool: cls+avg
+  trainable_blocks: -1        # try 2 if it overfits: freezes the first 10 of 12 blocks
+
+method:
+  name: baseline

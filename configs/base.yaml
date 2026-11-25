@@ -30,6 +30,11 @@ model:
   bottleneck: 256             # size of z, the feature CORAL and DANN align. Held below
                               # data.batch_size so CORAL's covariance is not rank-starved.
   dropout: 0.3
+  input_size: null            # null -> crops used at their native 64x64 (resnet).
+                              # dinov2 needs a multiple of 14: 70, 126 or 224.
+  vit_pool: cls+avg           # dinov2 only: cls | cls+avg
+  trainable_blocks: -1        # -1 = whole encoder trains, 0 = frozen,
+                              # n = only the last n blocks train
 
 loss:
   class_weights: balanced     # balanced (1/f_c, ratio 19:1) | sqrt (ratio 4:1) | none

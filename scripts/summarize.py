@@ -21,6 +21,16 @@ import pandas as pd
 ORDER = ["baseline", "bn_only", "coral", "dann", "oracle"]
 
 
+def _backbone_from_config(run_dir):
+    """Older runs predate metrics.json recording the backbone; read it from the saved config."""
+    cfg = run_dir / "config.yaml"
+    if cfg.exists():
+        for line in cfg.read_text().splitlines():
+            if line.strip().startswith("backbone:"):
+                return line.split(":", 1)[1].strip()
+    return "?"
+
+
 def load(runs_dir):
     rows = []
     for f in sorted(glob.glob(str(Path(runs_dir) / "*" / "*" / "metrics.json"))):
@@ -30,6 +40,10 @@ def load(runs_dir):
             print(f"  skipping {f}: {e}")
             continue
         row = {"method": d["method"], "seed": d["seed"], "run_dir": d.get("run_dir", f),
+               "backbone": d.get("backbone") or _backbone_from_config(Path(f).parent),
+               # the run folder is the configuration's identity: two runs can share
+               # (backbone, method) and still be different experiments
+               "group": d.get("group") or d["method"],
                "epochs_run": d.get("epochs_run"), "best_epoch_score": d.get("best_epoch_score"),
                "minutes": (d.get("train_seconds") or 0) / 60}
         for split, m in d["splits"].items():
@@ -45,11 +59,13 @@ def load(runs_dir):
     return df.sort_values(["method", "seed"]).reset_index(drop=True)
 
 
-def table(df, splits, metric):
-    """mean +/- std over seeds, one row per method."""
+def table(df, splits, metric, by=("method",)):
+    """mean +/- std over seeds, one row per method (per backbone when several are present)."""
     out = []
-    for method, g in df.groupby("method", observed=True):
-        row = {"method": method, "seeds": len(g)}
+    for key, g in df.groupby(list(by), observed=True):
+        key = key if isinstance(key, tuple) else (key,)
+        row = dict(zip(by, key))
+        row["seeds"] = len(g)
         for s in splits:
             col = f"{s}/{metric}"
             if col in g:
@@ -70,30 +86,47 @@ def main():
 
     df = load(args.runs)
     metric = args.metric
+    # One row per run GROUP. Grouping by (backbone, method) is not enough: a frozen and a
+    # fine-tuned DINOv2 baseline share both and are different experiments.
+    by = ("group", "backbone", "method")
+    configs = sorted(set(df["group"]))
+    if len(configs) > 1:
+        print(f"NOTE: {len(configs)} run groups present. Each is a separate configuration and "
+              f"they are never averaged together. Compare across them only deliberately - a "
+              f"backbone or freezing change means the whole grid has to be re-run.\n")
 
     # ---------------------------------------------------------------- every run
     print(f"all runs ({len(df)})\n")
-    print(f"{'method':<10}{'seed':>5}{'ep':>4}{'min':>7}" +
+    print(f"{'group':<24}{'backbone':<16}{'seed':>5}{'ep':>4}{'min':>7}" +
           "".join(f"{s:>14}" for s in args.splits))
-    for _, r in df.iterrows():
-        print(f"{str(r['method']):<10}{r['seed']:>5}{r['epochs_run'] or 0:>4}{r['minutes']:>7.0f}" +
+    for _, r in df.sort_values(["group", "seed"]).iterrows():
+        print(f"{str(r['group']):<24}{str(r['backbone']):<16}{r['seed']:>5}"
+              f"{r['epochs_run'] or 0:>4}{r['minutes']:>7.0f}" +
               "".join(f"{r.get(f'{s}/{metric}', float('nan')):>14.4f}" for s in args.splits))
 
     # ---------------------------------------------------------------- mean +/- sd
-    t = table(df, args.splits, metric)
+    t = table(df, args.splits, metric, by=by)
     print(f"\n\nmean +/- sd over seeds  ({metric})\n")
-    print(f"{'method':<10}{'n':>3}" + "".join(f"{s:>20}" for s in args.splits))
+    print(f"{'group':<24}{'backbone':<16}{'n':>3}" + "".join(f"{s:>20}" for s in args.splits))
     for _, r in t.iterrows():
         cells = ""
         for s in args.splits:
             sd = r.get(f"{s}_sd", np.nan)
             cells += f"{r[s]:>13.4f} +/-{sd:>5.4f}" if pd.notna(sd) else f"{r[s]:>20.4f}"
-        print(f"{str(r['method']):<10}{int(r['seeds']):>3}" + cells)
+        print(f"{str(r['group']):<24}{str(r['backbone']):<16}{int(r['seeds']):>3}" + cells)
 
     # ---------------------------------------------------------------- the decomposition
-    have = set(t["method"].astype(str))
-    if {"baseline", "bn_only"} <= have:
-        print(f"\n\nwhat each part contributes  ({metric}, mean over seeds)\n")
+    # the decomposition only makes sense inside one backbone, and needs both control runs
+    grid = t[t["group"] == t["method"]]        # the baseline/bn_only/coral/dann grid
+    groups = [(b, grid[grid["backbone"] == b]) for b in sorted(set(grid["backbone"]))]
+    groups = [(b, g) for b, g in groups if {"baseline", "bn_only"} <= set(g["method"].astype(str))]
+    if not groups:
+        print("\n(the baseline -> bn_only -> coral/dann decomposition needs both a baseline "
+              "and a bn_only run with the same backbone)")
+    for bname, t in groups:
+        head = f"  [{bname}]" if bname else ""
+        print(f"\n\nwhat each part contributes{head}  ({metric}, mean over seeds)\n")
+        have = set(t["method"].astype(str))
         base_sd = t.loc[t["method"].astype(str) == "baseline"]
         for s in args.splits:
             get = lambda m: float(t.loc[t["method"].astype(str) == m, s].iloc[0])
@@ -107,8 +140,6 @@ def main():
                     d = get(m) - get("bn_only")
                     print(f"    {m + ' alignment loss':<22} bn_only  -> {m:<7} {d:+.4f}  {verdict(d, noise)}")
             print()
-    else:
-        print("\n(need both baseline and bn_only runs for the decomposition)")
 
     if args.csv:
         df.to_csv(args.csv, index=False)

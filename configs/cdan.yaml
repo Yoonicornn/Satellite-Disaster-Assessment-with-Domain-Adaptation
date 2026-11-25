@@ -1,0 +1,14 @@
+# CDAN. Like DANN, but the discriminator sees the outer product of the feature z and the
+# predicted class distribution, so the encoder is pushed to align p(z|y) rather than p(z).
+#   Long et al., Conditional Adversarial Domain Adaptation (arXiv 1705.10667)
+#
+# entropy: true turns this into CDAN+E, which weights examples by prediction confidence.
+# Our model is confidently WRONG on caribbean, so +E can amplify that. Run plain CDAN first.
+_base_: base.yaml
+
+method:
+  name: cdan
+  lambda_max: 1.0             # value the ramp approaches
+  gamma: 10.0                 # steepness of the ramp (paper value)
+  hidden: 256                 # discriminator: (bottleneck * 4) -> hidden -> hidden -> 2
+  entropy: false              # true = CDAN+E

@@ -38,7 +38,7 @@ from .algorithms import make_algorithm
 from .config import add_config_args, load_config, save_config
 from .data.crops import AugConfig, class_weights, cycle, make_datasets, make_loaders
 from .metrics import CLASS_NAMES, compute_metrics, confusion, format_confusion, format_metrics
-from .models.siamese import build_model, count_parameters
+from .models.siamese import build_model, count_parameters, describe
 
 
 # ----------------------------------------------------------------------------- setup
@@ -324,7 +324,7 @@ def main():
     algo.build(model)
     algo.to(device)
     extra_params = sum(p.numel() for p in algo.parameters())
-    print(f"model    : {cfg.model.backbone}, {count_parameters(model):,} parameters")
+    print(f"model    : {describe(model)}")
     print(f"method   : {algo.name}" + (f", {extra_params:,} extra parameters" if extra_params else ""))
 
     criterion = nn.CrossEntropyLoss(weight=weights)
@@ -457,6 +457,10 @@ def main():
 
     results = {"run": cfg.run.name, "group": cfg.run.group, "run_dir": str(out_dir),
                "method": cfg.method.name, "seed": cfg.run.seed,
+               "backbone": cfg.model.backbone,
+               "input_size": cfg.model.input_size,
+               "trainable_blocks": cfg.model.trainable_blocks,
+               "bottleneck": cfg.model.bottleneck,
                "best_epoch_score": best, "epochs_run": epochs_run,
                "epochs_planned": cfg.optim.epochs,
                "stopped_early": stopped_early is not None,
