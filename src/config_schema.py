@@ -34,10 +34,39 @@ class RunCfg(Section):
 
 
 class AugCfg(Section):
+    backend: Literal["torchvision", "albumentations"] = Field(
+        default="torchvision",
+        description="torchvision = geometric only (the original runs); albumentations adds "
+                    "the photometric keys below. Both share one draw across pre and post.")
     hflip: bool = True
+    vflip: bool = Field(default=False, description="overhead imagery has no canonical up")
     rot90: bool = True
     rotate_deg: float = Field(default=10.0, ge=0, le=180, description="extra rotation, +/- degrees")
     scale: tuple[float, float] = Field(default=(0.9, 1.1), description="random zoom range")
+
+    # photometric; albumentations backend only, each one off at its default
+    brightness_contrast: float = Field(default=0.0, ge=0, le=1,
+                                       description="limit for brightness and contrast, 0 = off")
+    hue_sat_val: tuple[float, float, float] = Field(
+        default=(0.0, 0.0, 0.0), description="hue / saturation / value shift limits, 0s = off")
+    gamma: tuple[float, float] = Field(default=(100.0, 100.0),
+                                       description="RandomGamma percent; (100,100) = off")
+    blur_sigma: tuple[float, float] = Field(default=(0.0, 0.0),
+                                            description="GaussianBlur sigma range, 0s = off")
+    noise_std: tuple[float, float] = Field(default=(0.0, 0.0),
+                                           description="GaussNoise std, fraction of 0-1, 0s = off")
+    dropout: float = Field(default=0.0, ge=0, le=1, description="p of CoarseDropout, 0 = off")
+    p_photo: float = Field(default=0.5, ge=0, le=1,
+                           description="probability each photometric transform fires")
+
+    @model_validator(mode="after")
+    def _photometric_needs_albumentations(self):
+        photo = (self.brightness_contrast or self.hue_sat_val != (0.0, 0.0, 0.0)
+                 or self.gamma != (100.0, 100.0) or self.blur_sigma != (0.0, 0.0)
+                 or self.noise_std != (0.0, 0.0) or self.dropout)
+        if photo and self.backend != "albumentations":
+            raise ValueError("photometric augmentation needs data.aug.backend=albumentations")
+        return self
 
     @model_validator(mode="after")
     def _check_scale(self):

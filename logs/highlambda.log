@@ -1,0 +1,100 @@
+seed 3, 25 epochs
+run group                          config  overrides                                         est
+coral_r34_lam200                   coral   method.lambda_weight=200                          48m
+dann_r34_lmax5                     dann    method.lambda_max=5                               48m
+cdan_r34_lmax5                     cdan    method.lambda_max=5                               50m
+coral_dinov2_ft2_lam200            coral   method.lambda_weight=200 model.backbone=dinov2_vits14 model.input_size=126 model.trainable_blocks=2   153m
+dann_dinov2_ft2_lmax5              dann    method.lambda_max=5 model.backbone=dinov2_vits14 model.input_size=126 model.trainable_blocks=2   154m
+cdan_dinov2_ft2_lmax5              cdan    method.lambda_max=5 model.backbone=dinov2_vits14 model.input_size=126 model.trainable_blocks=2   152m
+
+estimated total: 10h 5m   (finishes about Thu 09:13)
+
+started : Wed 25 Nov 2026 23:08:12 EST
+--- coral_r34_lam200   started Wed 23:08:12   -> logs/coral_r34_lam200.log
+    done in 49 min   best macro_f1 on source_val: 0.7100
+--- dann_r34_lmax5   started Wed 23:57:40   -> logs/dann_r34_lmax5.log
+    done in 49 min   best macro_f1 on source_val: 0.6962
+--- cdan_r34_lmax5   started Thu 00:46:55   -> logs/cdan_r34_lmax5.log
+    done in 49 min   best macro_f1 on source_val: 0.6901
+--- coral_dinov2_ft2_lam200   started Thu 01:36:25   -> logs/coral_dinov2_ft2_lam200.log
+    done in 155 min   best macro_f1 on source_val: 0.7567
+--- dann_dinov2_ft2_lmax5   started Thu 04:12:02   -> logs/dann_dinov2_ft2_lmax5.log
+    done in 155 min   best macro_f1 on source_val: 0.7510
+--- cdan_dinov2_ft2_lmax5   started Thu 06:47:33   -> logs/cdan_dinov2_ft2_lmax5.log
+    done in 156 min   best macro_f1 on source_val: 0.7497
+
+finished: Thu 26 Nov 2026 09:23:43 EST   (615 min)
+
+NOTE: 16 run groups present. Each is a separate configuration and they are never averaged together. Compare across them only deliberately - a backbone or freezing change means the whole grid has to be re-run.
+
+all runs (28)
+
+group                   backbone         seed  ep    min    source_val   target_test          test
+baseline                resnet34            1  25     26        0.7072        0.5376        0.2140
+baseline                resnet34            3  25     27        0.7147        0.5316        0.2143
+baseline                resnet34           14  25     27        0.7129        0.5314        0.2220
+baseline_dinov2_ft2     dinov2_vits14       1  25     87        0.7522        0.5620        0.3191
+baseline_dinov2_ft2     dinov2_vits14       3  25     87        0.7606        0.5519        0.3291
+baseline_dinov2_ft2     dinov2_vits14      14  25     87        0.7532        0.5578        0.3488
+baseline_frozen_dinov2  dinov2_vits14       1  25     71        0.7108        0.5119        0.3373
+baseline_frozen_dinov2  dinov2_vits14       3  25     71        0.7205        0.5164        0.3349
+baseline_frozen_dinov2  dinov2_vits14      14  25     70        0.7061        0.5117        0.3544
+baseline_frozen_r34     resnet34            3  25     10        0.6087        0.4411        0.2106
+bn_only                 resnet34            1  25     33        0.7188        0.5334        0.2438
+bn_only                 resnet34            3  25     33        0.7195        0.5339        0.2279
+bn_only                 resnet34           14  25     33        0.7239        0.5378        0.2350
+cdan_dinov2_ft2         dinov2_vits14       3  25    152        0.7460        0.5034        0.3171
+cdan_dinov2_ft2_lmax5   dinov2_vits14       3  25    153        0.7497        0.5292        0.3498
+cdan_r34_lmax5          resnet34            3  25     48        0.6901        0.5007        0.1719
+coral                   resnet34            1  25     48        0.7199        0.5350        0.2356
+coral                   resnet34            3  25     48        0.7141        0.5313        0.2183
+coral                   resnet34           14  25     48        0.7158        0.5289        0.2167
+coral_dinov2_ft2        dinov2_vits14       3  25    153        0.7565        0.5407        0.3370
+coral_dinov2_ft2_lam200 dinov2_vits14       3  25    152        0.7567        0.5088        0.2798
+coral_r34_lam200        resnet34            3  25     48        0.7100        0.5413        0.2188
+dann                    resnet34            1  25     48        0.7121        0.5364        0.2360
+dann                    resnet34            3  25     48        0.7108        0.5280        0.2191
+dann                    resnet34           14  25     48        0.7162        0.5318        0.2271
+dann_dinov2_ft2         dinov2_vits14       3  25    154        0.7484        0.5482        0.2873
+dann_dinov2_ft2_lmax5   dinov2_vits14       3  25    152        0.7510        0.5138        0.2905
+dann_r34_lmax5          resnet34            3  25     48        0.6962        0.5208        0.2043
+
+
+mean +/- sd over seeds  (macro_f1)
+
+group                   backbone          n          source_val         target_test                test
+baseline                resnet34          3       0.7116 +/-0.0039       0.5335 +/-0.0035       0.2168 +/-0.0045
+baseline_dinov2_ft2     dinov2_vits14     3       0.7553 +/-0.0046       0.5572 +/-0.0051       0.3323 +/-0.0151
+baseline_frozen_dinov2  dinov2_vits14     3       0.7124 +/-0.0074       0.5133 +/-0.0026       0.3422 +/-0.0106
+baseline_frozen_r34     resnet34          1              0.6087              0.4411              0.2106
+bn_only                 resnet34          3       0.7207 +/-0.0028       0.5350 +/-0.0024       0.2356 +/-0.0080
+cdan_dinov2_ft2         dinov2_vits14     1              0.7460              0.5034              0.3171
+cdan_dinov2_ft2_lmax5   dinov2_vits14     1              0.7497              0.5292              0.3498
+cdan_r34_lmax5          resnet34          1              0.6901              0.5007              0.1719
+coral                   resnet34          3       0.7166 +/-0.0030       0.5317 +/-0.0030       0.2235 +/-0.0105
+coral_dinov2_ft2        dinov2_vits14     1              0.7565              0.5407              0.3370
+coral_dinov2_ft2_lam200 dinov2_vits14     1              0.7567              0.5088              0.2798
+coral_r34_lam200        resnet34          1              0.7100              0.5413              0.2188
+dann                    resnet34          3       0.7130 +/-0.0028       0.5320 +/-0.0042       0.2274 +/-0.0084
+dann_dinov2_ft2         dinov2_vits14     1              0.7484              0.5482              0.2873
+dann_dinov2_ft2_lmax5   dinov2_vits14     1              0.7510              0.5138              0.2905
+dann_r34_lmax5          resnet34          1              0.6962              0.5208              0.2043
+
+
+what each part contributes  [resnet34]  (macro_f1, mean over seeds)
+
+  [source_val]   baseline seed-to-seed sd = 0.0039   <- a gain smaller than this is not a result
+    BatchNorm adaptation   baseline -> bn_only   +0.0091  above noise
+    coral alignment loss   bn_only  -> coral   -0.0041  WORSE, beyond noise
+    dann alignment loss    bn_only  -> dann    -0.0077  WORSE, beyond noise
+
+  [target_test]   baseline seed-to-seed sd = 0.0035   <- a gain smaller than this is not a result
+    BatchNorm adaptation   baseline -> bn_only   +0.0015  within noise
+    coral alignment loss   bn_only  -> coral   -0.0033  within noise
+    dann alignment loss    bn_only  -> dann    -0.0030  within noise
+
+  [test]   baseline seed-to-seed sd = 0.0045   <- a gain smaller than this is not a result
+    BatchNorm adaptation   baseline -> bn_only   +0.0188  above noise
+    coral alignment loss   bn_only  -> coral   -0.0120  WORSE, beyond noise
+    dann alignment loss    bn_only  -> dann    -0.0082  WORSE, beyond noise
+

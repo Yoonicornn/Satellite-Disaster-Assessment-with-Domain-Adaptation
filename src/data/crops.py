@@ -2,8 +2,13 @@
 Dataset over the crops made by scripts/extract_crops.py.
 
 One sample is one building: the pre crop, the post crop, and the damage label.
-The two crops always get the SAME random augmentation, otherwise they stop being aligned
-and the model cannot compare them.
+The two crops always get the SAME random augmentation, geometric and photometric, otherwise
+they stop being aligned and `f_post - f_pre` stops meaning "what changed".
+
+Two augmentation backends, chosen by data.aug.backend:
+    torchvision     geometric only, the original. Keep it to reproduce the earlier runs.
+    albumentations  geometric + photometric, via the `images` target, which gives every
+                    image in the stack identical parameters.
 
 Quick check (from the project root):
     python -m src.data.crops --crops crops/wind_64
@@ -39,23 +44,102 @@ TARGET_METHODS = ("bn_only", "coral", "dann", "cdan")
 # ----------------------------------------------------------------------------- augmentation
 @dataclass
 class AugConfig:
-    """Geometric augmentation only. Applied with the same parameters to the pre and post crop.
+    """Augmentation, applied with the SAME parameters to the pre and post crop.
 
-    Photometric augmentation is left out on purpose: paper 2 removed it from its final baseline,
-    and changing colours would interfere with what CORAL and DANN are trying to align.
+    Geometric keys work with either backend. The photometric keys need
+    backend="albumentations" and are ignored otherwise; each is off at its default, so the
+    torchvision defaults reproduce the original runs exactly.
     """
+    backend: str = "torchvision"                    # torchvision | albumentations
+
+    # --- geometric
     hflip: bool = True                              # horizontal flip
+    vflip: bool = False                             # overhead imagery has no canonical "up"
     rot90: bool = True                              # 0, 90, 180 or 270 degrees
     rotate_deg: float = 10.0                        # extra small rotation, in [-x, +x]
     scale: tuple[float, float] = (0.9, 1.1)         # random zoom
 
+    # --- photometric (albumentations only). 0 / no-op defaults = off.
+    brightness_contrast: float = 0.0                # limit for both, e.g. 0.3
+    hue_sat_val: tuple[float, float, float] = (0.0, 0.0, 0.0)   # shift limits
+    gamma: tuple[float, float] = (100.0, 100.0)     # percent; (100,100) is a no-op
+    blur_sigma: tuple[float, float] = (0.0, 0.0)    # GaussianBlur sigma range
+    noise_std: tuple[float, float] = (0.0, 0.0)     # GaussNoise, fraction of the 0-1 range
+    dropout: float = 0.0                            # p of CoarseDropout
+    p_photo: float = 0.5                            # p for each photometric transform
+
     def __post_init__(self):
-        # YAML gives a list; make it a tuple so the is_identity check below behaves
+        # YAML gives lists; tuples make the no-op checks below behave
         self.scale = tuple(self.scale)
+        self.hue_sat_val = tuple(self.hue_sat_val)
+        self.gamma = tuple(self.gamma)
+        self.blur_sigma = tuple(self.blur_sigma)
+        self.noise_std = tuple(self.noise_std)
+
+    @property
+    def geometric_identity(self) -> bool:
+        return (not self.hflip and not self.vflip and not self.rot90
+                and self.rotate_deg == 0 and self.scale == (1.0, 1.0))
+
+    @property
+    def photometric_identity(self) -> bool:
+        return (self.brightness_contrast == 0 and self.hue_sat_val == (0.0, 0.0, 0.0)
+                and self.gamma == (100.0, 100.0) and self.blur_sigma == (0.0, 0.0)
+                and self.noise_std == (0.0, 0.0) and self.dropout == 0)
 
     @property
     def is_identity(self) -> bool:
-        return not self.hflip and not self.rot90 and self.rotate_deg == 0 and self.scale == (1.0, 1.0)
+        return self.geometric_identity and (self.backend != "albumentations"
+                                            or self.photometric_identity)
+
+
+def build_albumentations(aug: AugConfig):
+    """One A.Compose. The `images` target gives every image in the stack identical
+    parameters, which is what keeps the pre/post pair aligned."""
+    import albumentations as A
+
+    # The `*_limit` names below were REMOVED in AlbumentationsX 2.2.0 (renamed to `*_range`,
+    # with no deprecation period). AlbumentationsX installs under the same `albumentations`
+    # import name, so the only way to tell is the version. pip install albumentations gives
+    # 2.0.8, which is what this is written for. Fail here with something readable rather
+    # than part way through the first epoch of an overnight run.
+    if tuple(int(x) for x in A.__version__.split(".")[:2]) >= (2, 2):
+        raise RuntimeError(
+            f"albumentations {A.__version__} renamed the *_limit arguments this code uses "
+            f"(2.2.0 removed them outright). Either:\n"
+            f"    pip install 'albumentations==2.0.8'\n"
+            f"or update build_albumentations() to the *_range names."
+        )
+
+    t = []
+    if aug.hflip:
+        t.append(A.HorizontalFlip(p=0.5))
+    if aug.vflip:
+        t.append(A.VerticalFlip(p=0.5))
+    if aug.rot90:
+        t.append(A.RandomRotate90(p=1.0))           # k is drawn inside, 0 included
+    if aug.rotate_deg > 0 or aug.scale != (1.0, 1.0):
+        t.append(A.Affine(rotate=(-aug.rotate_deg, aug.rotate_deg),
+                          scale=aug.scale, p=1.0))
+
+    bc, (h, sa, v) = aug.brightness_contrast, aug.hue_sat_val
+    if bc > 0:
+        t.append(A.RandomBrightnessContrast(brightness_limit=bc, contrast_limit=bc,
+                                            p=aug.p_photo))
+    if (h, sa, v) != (0.0, 0.0, 0.0):
+        t.append(A.HueSaturationValue(hue_shift_limit=h, sat_shift_limit=sa,
+                                      val_shift_limit=v, p=aug.p_photo))
+    if aug.gamma != (100.0, 100.0):
+        t.append(A.RandomGamma(gamma_limit=aug.gamma, p=aug.p_photo))
+    if aug.blur_sigma[1] > 0:
+        t.append(A.GaussianBlur(blur_limit=0, sigma_limit=aug.blur_sigma, p=aug.p_photo))
+    if aug.noise_std[1] > 0:
+        t.append(A.GaussNoise(std_range=aug.noise_std, p=aug.p_photo))
+    if aug.dropout > 0:
+        t.append(A.CoarseDropout(num_holes_range=(1, 3),
+                                 hole_height_range=(0.05, 0.2),
+                                 hole_width_range=(0.05, 0.2), p=aug.dropout))
+    return A.Compose(t)
 
 
 def augment_pair(pre: torch.Tensor, post: torch.Tensor, aug: AugConfig):
@@ -66,6 +150,9 @@ def augment_pair(pre: torch.Tensor, post: torch.Tensor, aug: AugConfig):
     """
     if aug.hflip and random.random() < 0.5:
         pre, post = torch.flip(pre, [2]), torch.flip(post, [2])
+
+    if aug.vflip and random.random() < 0.5:
+        pre, post = torch.flip(pre, [1]), torch.flip(post, [1])
 
     if aug.rot90:
         k = random.randint(0, 3)
@@ -121,6 +208,7 @@ class CropDataset(Dataset):
         # "0007e545-dec1-4999-8d38-068d2ff6888c", so keep it as text
         self.uids = self.meta["building_uid"].astype(str).to_numpy()
         self._pre = self._post = None                            # memmaps, opened per worker
+        self._tf = None                                          # albumentations, built per worker
 
     # the memmaps are opened on first use, not in __init__, so that DataLoader workers
     # (which may be started with "spawn" on macOS) each open their own handle
@@ -133,15 +221,29 @@ class CropDataset(Dataset):
     def __len__(self):
         return len(self.rows)
 
+    def _albu(self):
+        """Built lazily, like the memmaps, so each DataLoader worker makes its own."""
+        if self._tf is None:
+            self._tf = build_albumentations(self.aug)
+        return self._tf
+
     def __getitem__(self, i):
         pre_arr, post_arr = self._arrays()
         r = int(self.rows[i])
 
         # np.array copies out of the read-only memmap, which also keeps torch from warning
-        pre = torch.from_numpy(np.array(pre_arr[r])).permute(2, 0, 1).float() / 255.0
-        post = torch.from_numpy(np.array(post_arr[r])).permute(2, 0, 1).float() / 255.0
+        pre_u8, post_u8 = np.array(pre_arr[r]), np.array(post_arr[r])
 
-        if self.train and not self.aug.is_identity:
+        albu = self.train and self.aug.backend == "albumentations" and not self.aug.is_identity
+        if albu:
+            # the `images` target applies ONE draw of parameters to both crops
+            out = self._albu()(images=np.stack([pre_u8, post_u8]))["images"]
+            pre_u8, post_u8 = np.ascontiguousarray(out[0]), np.ascontiguousarray(out[1])
+
+        pre = torch.from_numpy(pre_u8).permute(2, 0, 1).float() / 255.0
+        post = torch.from_numpy(post_u8).permute(2, 0, 1).float() / 255.0
+
+        if self.train and not albu and not self.aug.is_identity:
             pre, post = augment_pair(pre, post, self.aug)
 
         pre = TF.normalize(pre, IMAGENET_MEAN, IMAGENET_STD)

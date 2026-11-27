@@ -1,0 +1,18 @@
+experiment: aug_all   seeds: 3   epochs: 25
+
+run group                        config    seed     est
+baseline_aug                     baseline  3        48m
+bn_only_aug                      bn_only   3        48m
+coral_aug                        coral     3        48m
+dann_aug                         dann      3        48m
+cdan_aug                         cdan      3        50m
+baseline_dinov2_ft2_aug          baseline  3       153m
+bn_only_dinov2_ft2_aug           bn_only   3       153m
+coral_dinov2_ft2_aug             coral     3       153m
+dann_dinov2_ft2_aug              dann      3       154m
+cdan_dinov2_ft2_aug              cdan      3       152m
+
+estimated total: 16h 47m   (finishes about Fri 17:19)
+
+started : Fri 27 Nov 2026 00:32:03 EST
+--- baseline_aug seed3   started Fri 00:32:03   -> logs/baseline_aug_seed3.log

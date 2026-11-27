@@ -16,11 +16,22 @@ data:
                               # CORAL estimates a bottleneck x bottleneck covariance from ONE
                               # batch, so a small batch makes that estimate mostly noise.
   workers: 2
-  aug:                        # geometric only, applied identically to the pre and post crop
+  aug:                        # one draw of parameters, applied to BOTH the pre and post crop
+    backend: torchvision      # torchvision (geometric only, the original) | albumentations
     hflip: true
+    vflip: false              # overhead imagery has no canonical "up"
     rot90: true
     rotate_deg: 10.0
     scale: [0.9, 1.1]
+    # photometric; needs backend: albumentations. Defaults below are all OFF, so the
+    # torchvision settings above reproduce the earlier runs exactly.
+    brightness_contrast: 0.0  # limit for both, e.g. 0.3
+    hue_sat_val: [0.0, 0.0, 0.0]
+    gamma: [100.0, 100.0]     # percent; (100,100) is a no-op
+    blur_sigma: [0.0, 0.0]
+    noise_std: [0.0, 0.0]
+    dropout: 0.0              # p of CoarseDropout
+    p_photo: 0.5              # p for each photometric transform
 
 model:
   backbone: resnet34          # shared by the pre and post branch
