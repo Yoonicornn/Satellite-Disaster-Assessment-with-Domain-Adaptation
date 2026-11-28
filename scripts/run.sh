@@ -25,6 +25,7 @@ PLAN_ONLY=0
 
 EPOCHS="${EPOCHS:-25}"
 EXTRA="${EXTRA:-}"
+RESUME="${RESUME:-0}"              # 1 = continue a part-finished run from its last.pt
 SKIP_DONE="${SKIP_DONE:-1}"
 LOG_DIR="logs"
 
@@ -211,6 +212,7 @@ case "$EXP" in
     echo
     echo "knobs: SEEDS=\"1 3 14\"  EPOCHS=25  EXTRA=\"k=v\"  SKIP_DONE=0"
     echo "       WITH_AUG=1|mild   add augmentation to any experiment above"
+    echo "       RESUME=1          continue a part-finished run instead of restarting it"
     exit 1 ;;
 esac
 
@@ -283,7 +285,8 @@ for s in $SEEDS; do
     echo "--- $group seed$s   started $(date '+%a %H:%M:%S')   -> $log"
     t0=$SECONDS
     # shellcheck disable=SC2086  -- $extra and $EXTRA must word-split into separate args
-    if PYTHONUNBUFFERED=1 python -m src.train --config "configs/${cfg}.yaml" \
+    [ "$RESUME" = "1" ] && rflag="--resume" || rflag=""
+    if PYTHONUNBUFFERED=1 python -m src.train --config "configs/${cfg}.yaml" $rflag \
          --set run.seed="$s" optim.epochs="$EPOCHS" run.group="$group" $extra $EXTRA \
          > "$log" 2>&1; then
         echo "    done in $(( (SECONDS - t0) / 60 )) min   $(tr '\r' '\n' < "$log" | grep -m1 'best macro_f1' || true)"

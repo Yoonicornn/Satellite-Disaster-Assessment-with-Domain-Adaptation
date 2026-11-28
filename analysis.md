@@ -4,7 +4,7 @@ Working notes for the ECSE552 project _Satellite Disaster Assessment with Domain
 The README says **how** to run things. This file says **why** everything is the way it is, and
 records the numbers we measured so we do not have to rediscover them.
 
-Last updated: 2026-11-24, after the DINOv2 backbone experiments and the CDAN runs.
+Last updated: 2026-11-27, after the photometric-augmentation runs and the mechanism diagnosis.
 
 ---
 
@@ -15,14 +15,21 @@ loses on a different region, then test whether unsupervised domain adaptation re
 that loss. Everything is building-level classification using the bounding boxes xBD already
 provides — we do **not** do building detection or segmentation.
 
-**Headline result, in two parts:**
+**Headline result, in four parts:**
 
 1. **No adaptation method helped.** CORAL, DANN and CDAN all scored at or below the baseline, on
-   two different backbones. The only measurable adaptation effect was BatchNorm statistics
-   adapting to the target (+0.019 macro-F1), which happens for free inside CORAL and DANN and
-   has nothing to do with their loss.
+   two different backbones, with and without augmentation. The only measurable adaptation effect
+   was BatchNorm statistics adapting to the target (+0.019 macro-F1), which happens for free
+   inside CORAL and DANN and has nothing to do with their loss.
 2. **The backbone was worth six times more.** Replacing ImageNet ResNet-34 with DINOv2 ViT-S/14
    (last two blocks fine-tuned) gained **+0.116 macro-F1** on the unseen region.
+3. **Photometric augmentation was worth more than any DA method** — **+0.086** on caribbean for
+   the ResNet baseline, 19x that baseline's seed spread (10.12). It moves only the split with
+   the largest appearance shift.
+4. **We can now say why DA fails, from measurements rather than theory** (10.13). The DANN/CDAN
+   discriminator converges to chance while an offline probe still separates the same features at
+   0.73, and the useless domain term eats 60-65 % of the training loss. CORAL's objective
+   converges to ~0 yet is only 3 % of the loss and leaves separability untouched.
 
 Section 10 has the numbers, section 11 the explanation.
 
@@ -214,15 +221,47 @@ After filtering: **108,916 crops** from 112,781 buildings.
 
 ### 4.3 Augmentation
 
-Geometric only, applied with the **same random parameters** to the pre and post crop: horizontal
-flip, 90° rotations, ±10° rotation, 0.9–1.1 scale. Only on `source_train` and `target_train`,
-never on the evaluation splits.
+Two backends, chosen by `data.aug.backend`. Both apply the **same random parameters** to the pre
+and post crop, and both run only on `source_train` / `target_train`, never on evaluation splits.
 
-**No photometric augmentation**, because changing colours would interfere with exactly what
-CORAL and DANN are trying to align.
+**`torchvision` (default, what every run before 2026-11-27 used).** Geometric only: horizontal
+flip, 90° rotations, ±10° rotation, 0.9–1.1 scale.
 
-Implementation detail: the random numbers come from Python's `random`, not numpy. PyTorch's
-DataLoader reseeds `random` in each worker but **not** numpy's global generator.
+**`albumentations` (new).** The same geometry plus photometric transforms:
+
+| transform | setting | resolved range | p |
+|---|---|---|---|
+| RandomBrightnessContrast | `0.3` | brightness ±0.3, contrast ±0.3 | 0.5 |
+| HueSaturationValue | `[10,20,10]` | hue ±10, sat ±20, value ±10 (OpenCV HSV units) | 0.5 |
+| RandomGamma | `[80,120]` | gamma 0.8–1.2 | 0.5 |
+| GaussianBlur | `[0,1.0]` | sigma 0–1.0 px | 0.5 |
+| GaussNoise | `[0,0.05]` | std 0–5 % of the 0–1 range (≈0–13/255) | 0.5 |
+| CoarseDropout | `0.2` | 1–3 holes, each 5–20 % of width and height | 0.2 |
+
+All photometric knobs default to **off**, so an old config reproduces exactly. The schema rejects
+a photometric value unless `backend=albumentations`, so a silently ignored setting is impossible.
+
+**The pre/post pair gets one shared draw**, via albumentations' `images` target. Verified: feed
+two identical crops in and they come out identical, 200/200 draws, for every transform
+*including* `GaussNoise` and `CoarseDropout` — so the exact pixel noise realisation is shared,
+not just its magnitude. That matters here: the model computes `f_post − f_pre`, and independent
+noise would inject a fake difference signal into exactly the feature that carries the label.
+
+Cost: 1088 µs/sample against 281 for torchvision, about 6 s of CPU per epoch at 2 workers,
+overlapped with GPU compute. Not worth changing `data.workers` for.
+
+**Correction to an earlier version of this file.** It said *"No photometric augmentation, because
+changing colours would interfere with exactly what CORAL and DANN are trying to align."* We
+tested that, and the reasoning was half right. Augmentation helped the **baseline** most
+(+0.086 on caribbean) and the DA runs least (+0.010 to +0.013 on DINOv2), so it is true that it
+gives alignment less to work with. But avoiding it cost more than it saved: the plain augmented
+baseline beats every DA method on both backbones (10.12). Protecting a method that does not work
+is not a reason to give up the largest single gain available.
+
+Implementation detail for the torchvision path: the random numbers come from Python's `random`,
+not numpy. PyTorch's DataLoader reseeds `random` in each worker but **not** numpy's global
+generator. `vflip` was added to the config for the albumentations backend and originally not
+wired into `augment_pair()`, so it was silently ignored on the torchvision path — fixed.
 
 ---
 
@@ -465,8 +504,16 @@ to avoid, and paper 1 is loose about it.
 
 ### 8.2 Early stopping
 
-Implemented but **off**, and it stayed off. Section 10.7 shows why: validation loss turns upward
-10–18 epochs before macro-F1 peaks, so patience on the loss would stop every run far too early.
+Implemented (`optim.early_stop`, `optim.min_epochs`) but **off**, and it stayed off. Section 10.7
+shows why: validation loss turns upward 10–18 epochs before macro-F1 peaks, so patience on the
+loss would stop every run far too early.
+
+Patience on **macro-F1** would be safe, since that is the selection metric, but the best epoch
+varies a lot between configurations — 6 for resnet DANN, 22 for the augmented resnet baseline —
+so any patience short enough to save real time risks cutting a run that is still improving.
+Patience 8 with `min_epochs 12` is the setting to use if a future run needs it. Note that every
+run so far did a full 25 epochs; if a later one stops early, say so, because a reader comparing
+epoch counts will otherwise wonder.
 
 ---
 
@@ -781,6 +828,158 @@ separability measure: the encoder is actively fighting that particular discrimin
 never truly zero, and BatchNorm running statistics are being updated by the target batches. The
 frozen-feature probe said 0.888 for the same model. **Use the probe, not `dom-acc`.**
 
+The 2026-11-27 runs put a number on that gap, on the same checkpoints:
+
+| run | live `dom_acc` | offline decision-tree probe | gap |
+|---|---|---|---|
+| dann, resnet | 0.541 | 0.715 | +0.174 |
+| cdan, resnet | 0.561 | 0.731 | +0.169 |
+| dann, dinov2 | 0.565 | 0.729 | +0.164 |
+| cdan, dinov2 | 0.573 | 0.650 | +0.077 |
+
+A ~0.17 gap is not a measurement quirk — it is the finding in 10.13. The discriminator being at
+chance while a decision tree is not means the discriminator is too weak, not that the features
+are aligned.
+
+### 10.12 Photometric augmentation
+
+Settings in 4.3. Ten runs, every method x both backbones, **seed 3 only**. The sd in brackets is
+the matching 3-seed un-augmented baseline's own spread, so it says how many seed-widths the
+change is worth.
+
+**Effect of augmentation, seed 3 against seed 3:**
+
+| method | source_val | target_test | test (caribbean) |
+|---|---|---|---|
+| ResNet baseline | +0.0083 (2 sd) | +0.0076 (2 sd) | **+0.0862 (19 sd)** |
+| ResNet bn_only | −0.0111 (4 sd) | −0.0078 (3 sd) | **+0.0772 (10 sd)** |
+| ResNet CORAL | −0.0057 (ns) | +0.0084 (3 sd) | **+0.0511 (5 sd)** |
+| ResNet DANN | −0.0142 (5 sd) | +0.0015 (ns) | **+0.0701 (8 sd)** |
+| DINOv2 baseline | −0.0091 (ns) | −0.0077 (ns) | **+0.0430 (3 sd)** |
+| DINOv2 CORAL | −0.0013 | −0.0066 | +0.0127 |
+| DINOv2 DANN | +0.0141 | +0.0039 | +0.0102 |
+| DINOv2 CDAN | −0.0036 | −0.0233 | +0.0013 |
+
+**It moves the caribbean split and nothing else.** `source_val` and `target_test` shift by about
+±0.01 either way. That is the expected behaviour: caribbean is the split with the largest
+appearance shift (different country, sensor, GSD, building materials), and photometric
+augmentation buys robustness to appearance. Where appearance barely differs it has nothing to do.
+
+This is a second, independent confirmation of 10.2's finding that the three domains differ along
+*different* axes. The backbone fixed large-scale geography; augmentation fixes appearance; and
+**neither touches the hazard axis**, which remains the thing nothing has improved.
+
+**Ranked on caribbean, each against its own augmented baseline:**
+
+| ResNet-34 | test | vs base | | DINOv2 ft2 | test | vs base |
+|---|---|---|---|---|---|---|
+| bn_only_aug | 0.3051 | +0.0046 | | bn_only_aug | **0.3778** | +0.0057 |
+| baseline_aug | 0.3005 | — | | baseline_aug | 0.3721 | — |
+| dann_aug | 0.2892 | −0.0113 | | coral_aug | 0.3497 | −0.0224 |
+| coral_aug | 0.2694 | −0.0311 | | cdan_aug | 0.3184 | −0.0537 |
+| cdan_aug | 0.2581 | −0.0424 | | dann_aug | 0.2975 | −0.0746 |
+
+Same ordering as without augmentation: plain baseline on top, `bn_only` level with it, every
+alignment method below. **Augmentation raised the floor; it did not change the conclusion about
+DA.** `bn_only_dinov2_ft2_aug` at 0.3778 is the best caribbean score in the project, against a
+previous best of 0.3498.
+
+**Caveat, and it matters.** Single seed. The ResNet caribbean effect at 19 sd is safe by any
+reading. The DINOv2 effect is ~3 sd and is what the "best result" claim rests on, so seeds 1 and
+14 are an open item before it is quoted as a headline.
+
+### 10.13 Why the DA methods fail — measured, not inferred
+
+Section 11 explains the failure from theory (Zhao's bound). The augmented runs let us watch the
+mechanism directly in the TensorBoard scalars. **The two method families fail for opposite
+reasons.**
+
+| run | total loss | cls loss | DA term | DA share | live `dom_acc` |
+|---|---|---|---|---|---|
+| coral, resnet | 0.3881 | 0.3761 | 0.0120 | **3.1 %** | — |
+| coral, dinov2 | 0.3524 | 0.3414 | 0.0110 | **3.1 %** | — |
+| dann, resnet | 1.1457 | 0.4569 | 0.6888 | **60.1 %** | 0.5413 |
+| dann, dinov2 | 1.0735 | 0.3878 | 0.6857 | **63.9 %** | 0.5647 |
+| cdan, resnet | 1.0783 | 0.4019 | 0.6764 | **62.7 %** | 0.5615 |
+| cdan, dinov2 | 1.0247 | 0.3553 | 0.6694 | **65.3 %** | 0.5730 |
+
+**DANN and CDAN: the adversarial game collapsed.** The domain loss sits at 0.669–0.689. The
+binary cross-entropy of a discriminator guessing at random is **ln 2 = 0.693**, so it has
+converged to 97–99 % of the way to chance, and `dom_acc` agrees at 0.54–0.57.
+
+On its own that would read as successful alignment. The probe refutes it: an offline decision
+tree reaches **0.70–0.73** on those same frozen features (10.11). The domains remain plainly
+separable; the discriminator simply cannot see it. **It is too weak, and the features are not
+aligned.** Meanwhile that near-useless term is consuming 60–65 % of the training loss, so most
+of the gradient budget goes into noise. This shows up where you would expect — `dann_aug` has
+the worst classification loss of any run (0.457 against the baseline's 0.381) and peaks at epoch
+6 before decaying.
+
+**CORAL: the objective converged and it did not help.** `train/coral_raw` falls from 0.0017 to
+0.0003 and flattens — second-order statistics *are* matched. But the weighted term is
+40 x 0.0003 = 0.012, **3.1 % of the total loss**, and even fully converged the probe still
+separates those features at ~0.71. Matching covariances is not the same as matching
+distributions.
+
+**Two consequences:**
+
+1. **Raising lambda was never going to work, and now we know why it didn't.** For DANN/CDAN the
+   term already dominates the loss, so a larger lambda amplifies noise. For CORAL the distance is
+   already ~0, so there is nothing left to minimise — which is exactly why the lambda=200 runs
+   moved so little.
+2. **The DANN/CDAN fix is discriminator capacity, not lambda.** A wider/deeper discriminator or
+   a separate higher `disc_lr`, targeting a `dom_acc` nearer the probe's 0.73. Untested.
+
+For the report this is the strongest version of the negative result: not "DA did not help", but
+*the adversarial methods failed because the discriminator sat at chance while an offline probe
+separated the same features at 0.73, and CORAL failed because its objective reached zero without
+making the features any less separable.* That is a mechanism.
+
+### 10.14 Checkpoint selection is not the explanation
+
+Obvious objection: the DA runs peak early on `source_val` (epoch 6–7 for resnet DANN/CDAN against
+epoch 22 for the baseline), so maybe `best.pt` is taken before DA has done its work.
+
+**First check — had the ramp engaged?** Yes. At the selected epoch, lambda was already at 0.83
+(dann), 0.89 (cdan), 1.00 (coral, which ramps over 5 epochs) and 0.98–0.99 for the DINOv2 runs.
+DA was fully on.
+
+**Second check — does target performance peak later than source_val?** Mostly no. Comparing the
+epoch chosen on `source_val` with the epoch that maximises `target_test`:
+
+- The target peak is **later** in only 4 of 10 runs.
+- The worst case runs the other way: `cdan_dinov2_ft2_aug` is selected at epoch 12 but peaked on
+  target at epoch **2**.
+- Mean cost of honest selection: **0.0096**; max **0.0281**. DA runs do pay more (0.0121) than
+  baseline/bn_only runs (0.0058), so source selection is mildly unkind to them.
+
+**Third check — does oracle selection rescue DA?** Let every method cheat by picking the epoch
+that maximises `target_test`:
+
+| ResNet-34 | honest | oracle |
+|---|---|---|
+| baseline_aug | 0.5392 | **0.5475** |
+| coral_aug | +0.0005 | **−0.0078** |
+| bn_only_aug | −0.0131 | −0.0084 |
+| dann_aug | −0.0097 | −0.0144 |
+| cdan_aug | −0.0265 | −0.0246 |
+
+On ResNet the plain baseline still wins — CORAL actually gets *worse* relative to it, because the
+baseline had more headroom. On DINOv2 the picture differs and is worth reporting: DANN beats the
+baseline at the honest checkpoint (+0.0079) and more so with oracle (+0.0172), and CORAL moves
+from −0.0101 to +0.0080. So on the stronger backbone DA does something real on `target_test`,
+modest, and partly hidden by source-side selection.
+
+**Oracle numbers are diagnostic only** and can never be the reported result — selecting with
+target labels means the target set is no longer held out. Quote them as a clearly labelled upper
+bound. The value of the check is that it closes off the "you picked the wrong checkpoint"
+objection, which is precisely the audit Musgrave et al. (2021) argue most UDA papers skip.
+
+**Limitation.** `eval.track_splits` is `[target_test]`, so this analysis cannot be done on the
+caribbean `test` split — where the augmentation effect actually lives. Only `best.pt` and
+`last.pt` are kept, so the per-epoch `test` curve is not recoverable from these runs. Add `test`
+to `track_splits` for the seeded runs.
+
 ---
 
 ## 11. Why none of the methods worked
@@ -806,7 +1005,16 @@ the report: it was a prediction, not a post-hoc excuse.
 **What the backbone result adds.** The same three methods failed on two very different
 representations, while simply changing the representation gained +0.116 on caribbean. For this
 problem, where the features come from matters far more than any alignment objective applied on
-top of them.
+top of them. Photometric augmentation (10.12) says the same thing from another direction:
+changing the *input* distribution gained +0.086, more than any alignment objective managed.
+
+**What 10.13 adds.** The argument above says alignment *should not* help under label shift. The
+scalars say the alignment largely **never happened**: DANN/CDAN's discriminator converged to
+chance (loss 0.67-0.69 vs ln 2 = 0.693) while an offline probe still separated the same features
+at 0.73, and CORAL's objective reached ~0 without reducing separability at all. So there are two
+independent reasons these runs failed - a theoretical ceiling, and an optimisation that did not
+reach it. Do not merge them in the report: the first is a property of the problem, the second is
+a property of our implementation and could in principle be fixed with a stronger discriminator.
 
 **What the per-event split adds (10.2).** The shift has two axes of roughly equal size: hazard
 type (−0.267) and large-scale geography (−0.229). Geographic shift between US states is nil.
@@ -893,6 +1101,11 @@ paper 2's are _geometric_ transforms. We use paper 2's.
 | results table silently showed only 3 of 4 methods | `METHOD_ORDER` in notebook cell 2 did not list `bn_only` | add it to `METHOD_ORDER` and `COLOR` |
 | summary would have averaged frozen and ft2 DINOv2 together | grouping was by `(backbone, method)`, which they share | group by run folder instead |
 | `SyntaxError: f-string: unmatched '['` in a helper script | nested same-type quotes in an f-string, legal only on Python 3.12+ | check scripts with `ast.parse(src, feature_version=(3,10))` |
+| `--resume` crashed with `TypeError: RNG state must be a torch.ByteTensor` | `load_checkpoint` uses `map_location=device`, which moves **every** checkpoint tensor to MPS — including the RNG state, which `set_rng_state` requires on CPU as uint8 | `_cpu_byte()` in `train.py` moves the RNG states back before restoring. CPU-only machines never hit this |
+| `ModuleNotFoundError: simsimd` after `conda install albumentations` | the conda-forge package does not pull in `simsimd` / `stringzilla`, which `albucore` imports | `python -m pip install --no-deps simsimd stringzilla` (both are dependency-free wheels) |
+| albumentations rejecting `brightness_limit`, `gamma_limit`, … | AlbumentationsX 2.2+ renamed every `*_limit` to `*_range` with no deprecation, and installs under the same `albumentations` import name | pin `albumentations==2.0.8`; `build_albumentations()` now raises a readable error on 2.2+ instead of dying mid-epoch |
+| a killed queue immediately started the next run | `pkill` hit the training process first, so the still-running `run.sh` moved on | kill `scripts/run.sh` **before** `src.train` |
+| a crashed run vanished from `summarize.py` instead of showing as failed | it reads `metrics.json`, which is only written on a clean finish | use `scripts/progress.py`, which reads `history.csv` |
 
 ### 14.1 Timing
 
@@ -943,6 +1156,19 @@ paper 2's are _geometric_ transforms. We use paper 2's.
     numbers average two opposite effects and look like flat noise as a result.
 15. **Our numbers are not comparable to either paper's**: they do whole-image segmentation
     scored against the xView2 competition metric, we do building-crop classification.
+16. **Every augmented number is seed 3 only** (10.12). Say so. The ResNet caribbean gain is 19
+    seed-widths and safe to quote; the DINOv2 one is ~3 and should carry the caveat or wait for
+    seeds 1 and 14.
+17. **Separate the two reasons DA failed** (10.13, section 11). The label-shift bound is a
+    property of the problem; the discriminator sitting at chance is a property of our
+    implementation. Merging them overstates the first and hides the second.
+18. **Report the checkpoint-selection control** (10.14). "Maybe you picked the wrong epoch" is
+    the first thing a reader will ask about a negative DA result, and we can answer it: cost
+    ≤0.028, and DA still loses on ResNet under oracle selection. Label oracle numbers clearly as
+    not a valid UDA result.
+19. **Augmentation and the backbone fix different axes, and neither fixes hazard** (10.12).
+    The backbone helps large-scale geography, augmentation helps appearance, and the
+    hurricane-vs-tornado gap is still untouched by everything we tried.
 
 ---
 
@@ -950,13 +1176,21 @@ paper 2's are _geometric_ transforms. We use paper 2's.
 
 In order of value per hour:
 
-- [ ] **Run `scripts/per_event.py`** — separates geography from hazard type using predictions
-      that already exist. Needed for report point 15.1.
+- [ ] **Seeds 1 and 14 for the augmented runs** (~6.75 h) — everything in 10.12 is seed 3, and
+      the DINOv2 caribbean gain is ~3 sd while carrying the headline claim.
+      `SEEDS="1 14" bash scripts/run.sh aug_baselines`
 - [ ] **Seed ensemble** — average the softmax of the three DINOv2 ft2 seeds. No training.
 - [ ] **Prior correction at inference** (11, item 1). No training. The cheapest real improvement.
+- [ ] **A stronger discriminator for DANN/CDAN** — now justified by 10.13 rather than a hunch:
+      wider/deeper, or a separate `optim.disc_lr`, targeting a `dom_acc` nearer the probe's 0.73.
+      **Do not raise lambda instead** — 10.13 shows why that cannot work.
+- [ ] **Add `test` to `eval.track_splits`** so the caribbean curve is logged per epoch. Without
+      it 10.14's analysis cannot be repeated on the split where augmentation actually matters.
 - [ ] **Per-class F1 for the DINOv2 DA runs** — settles the CDAN explanation in 10.4.
 - [ ] **CORAL lambda check on DINOv2** — `lambda_weight: 40` was tuned on different features.
-- [ ] Seeds 1 and 14 for the DINOv2 DA runs.
+      Lower priority now: 10.13 shows the CORAL distance already converges to ~0.
 - [ ] DINOv2 at 224 on Colab — the biggest untried lever, needs a GPU.
-- [ ] Re-run `domain_probe.py` on the final checkpoints; 10.10 is from the archived 512 runs.
+- [ ] Re-run `domain_probe.py` on the final checkpoints; 10.11 is from the archived 512 runs.
+- [ ] A milder photometric setting (`WITH_AUG=mild`) — the current set is strong, and
+      `CoarseDropout` at p=0.2 can erase the roof damage that carries the label on a 64 px crop.
 - [ ] Optional ablations: `fusion=concat`, `class_weights=sqrt`, `vit_pool=cls`.

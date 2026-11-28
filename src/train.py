@@ -88,19 +88,29 @@ def rng_state(loaders):
     return state
 
 
+def _cpu_byte(t):
+    """RNG states must be CPU uint8 tensors. load_checkpoint uses map_location=device,
+    which moves every tensor in the checkpoint onto the training device - including
+    these. On MPS or CUDA that makes set_rng_state raise
+    'RNG state must be a torch.ByteTensor', so move them back."""
+    if torch.is_tensor(t):
+        return t.detach().to(device="cpu", dtype=torch.uint8)
+    return t
+
+
 def restore_rng(state, loaders):
     if not state:
         return False
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch"])
+    torch.set_rng_state(_cpu_byte(state["torch"]))
     if state.get("cuda") is not None and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.cuda.set_rng_state_all([_cpu_byte(s) for s in state["cuda"]])
     for name in ("train", "target"):
         loader = loaders.get(name)
         gen = getattr(loader, "generator", None) if loader is not None else None
         if gen is not None and state.get(f"loader_{name}") is not None:
-            gen.set_state(state[f"loader_{name}"])
+            gen.set_state(_cpu_byte(state[f"loader_{name}"]))
     return True
 
 

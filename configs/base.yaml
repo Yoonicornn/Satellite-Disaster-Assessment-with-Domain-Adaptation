@@ -59,7 +59,7 @@ optim:
   scheduler: cosine           # cosine | step | none
   amp: true                   # mixed precision; ignored on CPU
   grad_clip: 0                # 0 = off
-  early_stop: 0
+  early_stop: 1               # 1 = on
   min_epochs: 0
 
 method:

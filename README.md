@@ -18,11 +18,23 @@ or below the baseline. The only adaptation effect we could measure was BatchNorm
 adapting to the target, worth +0.019 macro-F1, and that happens for free inside CORAL and DANN
 rather than coming from their loss.
 
-**Changing the backbone was worth six times more.** Swapping ImageNet ResNet-34 for DINOv2
-ViT-S/14 with the last two blocks fine-tuned gained **+0.116 macro-F1** on the unseen region.
+**Two things did help, and neither is a DA method.**
 
-The representation mattered. The alignment objectives did not. [Section 8](#8-results) has the
-numbers.
+| change | gain on caribbean (`test`) |
+|---|---|
+| DINOv2 ViT-S/14 instead of ResNet-34 | **+0.116** (3 seeds) |
+| photometric augmentation, ResNet baseline | **+0.086** (1 seed, 19x the baseline sd) |
+| best DA method | at or below baseline |
+
+Best caribbean score so far is **0.3778** (`bn_only` + DINOv2 ft2 + augmentation), up from 0.3498.
+
+**We now know *why* the DA methods fail, not just that they do.** The DANN/CDAN discriminator
+sits at chance (domain loss 0.67-0.69 against ln 2 = 0.693) while an offline probe separates the
+same features at 0.73 - so the discriminator is too weak, the features are not aligned. CORAL's
+objective converges to ~0 but contributes only 3 % of the loss and leaves the features just as
+separable. [Section 8.7](#87-augmentation) and analysis.md 10.13 have the numbers.
+
+The representation and the input distribution mattered. The alignment objectives did not.
 
 ---
 
@@ -77,8 +89,9 @@ Satellite-Disaster-Assessment-with-Domain-Adaptation/
 ├── scripts/
 │   ├── create_subset.py       raw xBD -> xbd_subset/<type>/
 │   ├── extract_crops.py       xbd_subset -> crops/<type>_<size>/ + the splits
-│   ├── run_grid.sh            every method x every seed, with skip/resume
+│   ├── run.sh                 ONE runner; experiments are named presets inside it
 │   ├── summarize.py           runs/*/*/metrics.json -> mean +/- std table
+│   ├── progress.py            per-run state, including runs still training
 │   ├── watch_runs.py          live progress of every run
 │   └── per_event.py           scores split by event (geography vs hazard)
 ├── src/
@@ -122,6 +135,22 @@ conda-forge packages gives `OMP: Error #15` on macOS, because each ships its own
 
 `timm` is needed only for the DINOv2 backbone. It downloads the weights from HuggingFace on
 first use (88 MB for ViT-S/14) and caches them.
+
+**Augmentation needs albumentations, and there are two traps.**
+
+```bash
+conda install -c conda-forge albumentations        # gives 2.0.8
+python -m pip install --no-deps simsimd stringzilla
+python -c "import albumentations as A; print(A.__version__)"   # want 2.0.8
+```
+
+1. The conda-forge package does **not** pull in `simsimd` and `stringzilla`, which `albucore`
+   imports. Without them `import albumentations` fails with `ModuleNotFoundError: simsimd`.
+   Both are dependency-free wheels, so pip is safe here.
+2. Pin **2.0.8**. The PyPI `albumentations` package stops there; the 2.2+ line ships as a
+   separate package, **AlbumentationsX**, which installs under the same import name and renamed
+   every `*_limit` argument to `*_range` with no deprecation. `build_albumentations()` raises a
+   clear error if it sees 2.2+ rather than failing mid-epoch.
 
 ---
 
@@ -177,12 +206,31 @@ The split is **fixed for every run**; `run.seed` changes only the model init and
 
 ### Step 3 — train
 
-The ResNet grid, 4 methods x 3 seeds:
+`scripts/run.sh` is the only runner. Experiments are named presets inside it, so adding one is a
+few lines in that file rather than a new script.
 
 ```bash
-METHODS="baseline bn_only coral dann" SEEDS="3 1 14" EPOCHS=25 \
-  nohup caffeinate -i bash scripts/run_grid.sh > logs/grid.log 2>&1 &
+bash scripts/run.sh                       # list the experiments
+bash scripts/run.sh aug_all --plan        # print the plan and the time estimate, run nothing
+nohup caffeinate -i bash scripts/run.sh aug_all > logs/aug_all.log 2>&1 &
 ```
+
+| preset | what |
+|---|---|
+| `grid` | the original grid, paper-default hyperparameters, 3 seeds |
+| `aug_all` | every method + augmentation, both backbones |
+| `aug_r34` / `aug_dinov2` | one backbone only |
+| `aug_baselines` | baseline + augmentation, all seeds |
+| `highlambda` | CORAL/DANN/CDAN at 5x the default lambda |
+| `da_default` | CORAL/DANN/CDAN at the configs' own lambda |
+
+Knobs: `SEEDS="1 3 14"`, `EPOCHS=25`, `EXTRA="key=value"`, `SKIP_DONE=0`, `RESUME=1`,
+`WITH_AUG=1|mild` (adds augmentation to any preset and suffixes the run group so it never
+lands in the same folder as the un-augmented twin).
+
+The queue runs the cheap backbone first and skips any run that already has a `metrics.json`, so
+an interrupted night leaves a complete comparison and re-running the same command resumes.
+`RESUME=1` continues a part-finished run from its `last.pt` instead of restarting it.
 
 A DINOv2 run (note the `run.group`, so it does not mix with the ResNet runs):
 
@@ -215,12 +263,22 @@ python -m src.config --config configs/cdan.yaml --set run.seed=1
 ### Step 4 — monitor
 
 ```bash
-python scripts/watch_runs.py          # live table of every run, refreshes every 30 s
+python scripts/progress.py            # one row per run: epoch, done/running/stalled, best so far
+python scripts/watch_runs.py          # live table, refreshes every 30 s
 tensorboard --logdir runs --port 6007
 ```
 
-`watch_runs.py` reads `history.csv`, so it is not affected by the stdout buffering that makes a
-redirected log lag behind.
+Both read `history.csv`, so they are not affected by the stdout buffering that makes a redirected
+log lag behind. Use `progress.py` while runs are still going — `summarize.py` reads
+`metrics.json`, which is only written when a run **finishes**, so an in-flight or crashed run is
+simply absent from its table.
+
+To stop a queue, kill the script first or it will immediately start the next run:
+
+```bash
+pkill -f "scripts/run.sh" && pkill -f "src.train" && pkill -f caffeinate
+pgrep -fl "src.train|scripts/run.sh|caffeinate" || echo "all stopped"
+```
 
 ### Step 5 — read the results
 
@@ -289,7 +347,8 @@ accuracy would reward a model that ignores the damaged classes.
 
 **Setup.** 25 epochs, best checkpoint on `source_val` macro-F1, never on target labels.
 Crops 64x64, stratified group split with seed 8, bottleneck 256, batch 128, weighted
-cross-entropy, AdamW. DINOv2 runs resize crops to 126x126 inside the encoder.
+cross-entropy, AdamW. DINOv2 runs resize crops to 126x126 inside the encoder. Sections 8.1-8.6
+are **without** photometric augmentation; 8.7 adds it.
 
 Regenerate with `python scripts/summarize.py`.
 
@@ -449,7 +508,50 @@ wrong, **10,844 are minor-damage** — 88 % of all minor-damage buildings in the
 Every method wrong: 15,570 (68.8 %). Every method right: 4,377 (19.4 %). A net of +132 after
 fixing 1,042 and breaking 910 is churn, not adaptation.
 
-### 8.7 Timing
+### 8.7 Augmentation
+
+Added after the tables above. Geometric augmentation was always on; this adds **photometric**
+augmentation (brightness/contrast, hue/saturation/value, gamma, blur, noise, coarse dropout) with
+**one shared random draw for the pre/post pair**, so the two crops stay aligned. See analysis.md
+4.3 for the settings and 10.12 for the full result.
+
+All augmented runs are **seed 3 only**. The sd columns are the matching 3-seed baselines'.
+
+**Effect of augmentation, seed 3 vs seed 3:**
+
+| method | source_val | target_test | test (caribbean) |
+|---|---|---|---|
+| ResNet baseline | +0.0083 | +0.0076 | **+0.0862** (19 sd) |
+| ResNet bn_only | −0.0111 | −0.0078 | **+0.0772** (10 sd) |
+| ResNet CORAL | −0.0057 | +0.0084 | **+0.0511** (5 sd) |
+| ResNet DANN | −0.0142 | +0.0015 | **+0.0701** (8 sd) |
+| DINOv2 baseline | −0.0091 | −0.0077 | **+0.0430** (3 sd) |
+
+It moves the **caribbean split only**. `source_val` and `target_test` shift by about ±0.01,
+inside or barely at the noise floor. That is what photometric augmentation should do: caribbean
+is the split with the largest appearance shift, and where appearance barely differs it buys
+nothing.
+
+**Ranked on caribbean, each against its own augmented baseline:**
+
+| ResNet-34 | test | vs base | | DINOv2 ft2 | test | vs base |
+|---|---|---|---|---|---|---|
+| bn_only_aug | 0.3051 | +0.0046 | | bn_only_aug | **0.3778** | +0.0057 |
+| baseline_aug | 0.3005 | — | | baseline_aug | 0.3721 | — |
+| dann_aug | 0.2892 | −0.0113 | | coral_aug | 0.3497 | −0.0224 |
+| coral_aug | 0.2694 | −0.0311 | | cdan_aug | 0.3184 | −0.0537 |
+| cdan_aug | 0.2581 | −0.0424 | | dann_aug | 0.2975 | −0.0746 |
+
+Plain baseline + augmentation tops both backbones. Every alignment method makes it worse, and
+the only thing that edges past the baseline is `bn_only`, by an amount inside the noise. This is
+the same ordering as the un-augmented results, so augmentation did not change the conclusion
+about DA — it raised the floor underneath it.
+
+**Caveat.** One seed. The ResNet caribbean effect is 19x the baseline's seed-to-seed spread, so
+it is safe. The DINOv2 one is about 3x and carries the "new best result" claim, so seeds 1 and
+14 are an open item before that goes in the report.
+
+### 8.8 Timing
 
 25 epochs on an Apple Silicon Mac (MPS), batch 128:
 
@@ -468,17 +570,25 @@ fixing 1,042 and breaking 910 is churn, not adaptation.
 
 **Done**: subset creation, crops and splits, Dataset, five algorithms, two backbones, training
 loop with checkpoints and resume, evaluation with per-building predictions, the 12-run ResNet
-grid, 6 DINOv2 backbone runs, 3 DINOv2 DA runs, aggregation and monitoring scripts, domain
-probe, analysis notebook.
+grid, 6 DINOv2 backbone runs, DINOv2 DA runs, CDAN, the high-lambda runs, photometric
+augmentation and the 10-run augmented grid, the frozen-feature probe study, the mechanism
+diagnosis and checkpoint-selection control (analysis.md 10.13-10.14), aggregation and
+monitoring scripts,
+analysis notebook.
 
 **Open**, in order of value per hour:
 
+- [ ] **Seeds 1 and 14 for the augmented runs** (~6.75 h). Everything in 8.7 is seed 3. The
+      DINOv2 caribbean gain is ~3 sd and carries the headline, so it needs error bars.
+      `SEEDS="1 14" bash scripts/run.sh aug_baselines`
 - [ ] **Seed ensemble.** Average the softmax of the three DINOv2 ft2 seeds. No training —
       the `predictions_*.csv` are already on disk. This is what the xView2 winners did.
 - [ ] **Prior correction at inference.** Add `log(pi_target) - log(pi_source)` to the logits and
       re-score. No training. Directly attacks the miscalibration in 8.5.
+- [ ] **A stronger discriminator for DANN/CDAN.** Now justified by measurement, not a hunch:
+      analysis.md 10.13 shows the current one sits at chance while a probe separates the same
+      features at 0.73. Raising lambda is **not** the fix — the term is already 60-65 % of the loss.
 - [ ] **DINOv2 at 224 on Colab.** We run at 126 (81 patch tokens); DINOv2 was trained at 224
       (256 tokens). The biggest untried lever, but it needs a GPU.
-- [ ] More seeds for the DINOv2 DA runs (currently seed 3 only).
-- [ ] Re-run `domain_probe.py` on the final checkpoints; the numbers in analysis.md §10.8 are
-      from the archived bottleneck-512 runs.
+- [ ] Add `test` to `eval.track_splits` so the caribbean curve is recoverable per epoch; right
+      now only `target_test` is logged every epoch.
